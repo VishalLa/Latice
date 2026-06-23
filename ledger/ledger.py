@@ -4,7 +4,6 @@ from datetime import date
 from typing import Optional
 
 from schema import (
-    LedgerAccount, 
     TrialBalance, 
     TrialBalanceLine, 
     GSTSummary, 
@@ -12,69 +11,11 @@ from schema import (
     AgeingLine, 
     LedgerPosting, 
     JournalEntry, 
-    Account, 
-    DrCr, 
     AccountGroup, 
     COA
 )
-from ledger.journal import to_journal_entries
-
-
-# GENERAL LEDGER
-class GeneralLedger:
-    """
-    The complete General Ledger — a collection of all LedgerAccounts.
-    Usage:
-        gl = GeneralLedger()
-        gl.post_entries(journal_entries)
-        tb = gl.trial_balance()
-        gst = gl.gst_summary()
-    """
-    def __init__(self):
-        # account name → LedgerAccount
-        self._accounts: dict[str, LedgerAccount] = {}
-
-    def _get_or_create(self, account: Account) -> LedgerAccount:
-        if account.name not in self._accounts:
-            self._accounts[account.name] = LedgerAccount(account=account)
-        return self._accounts[account.name]
-
-    def post_entries(self, entries: list[JournalEntry]):
-        for entry in entries:
-            # Build a map: for each line, the "particulars" = names of opposite side accounts
-            debit_names  = [l.account.name for l in entry.lines if l.dr_cr == DrCr.DEBIT]
-            credit_names = [l.account.name for l in entry.lines if l.dr_cr == DrCr.CREDIT]
-
-            for line in entry.lines:
-                ledger_acc = self._get_or_create(line.account)
-
-                # Particulars: "By <Credit A/c>" for debits, "To <Debit A/c>" for credits
-                # Indian format: Dr entries show "To <opposite>", Cr entries show "By <opposite>"
-                if line.dr_cr == DrCr.DEBIT:
-                    opposite = ", ".join(credit_names)
-                    particulars = f"To {opposite}"
-                else:
-                    opposite = ", ".join(debit_names)
-                    particulars = f"By {opposite}"
-
-                ledger_acc.post(
-                    date_        = entry.date,
-                    particulars  = particulars,
-                    journal_id   = entry.entry_id,
-                    voucher_type = entry.voucher_type,
-                    dr_cr        = line.dr_cr,
-                    amount       = line.amount,
-                )
-
-    @property
-    def accounts(self) -> list[LedgerAccount]:
-        return sorted(self._accounts.values(), key=lambda a: a.name)
-
-    def get(self, account_name: str) -> Optional[LedgerAccount]:
-        return self._accounts.get(account_name)
-
-    def accounts_in_group(self, group: AccountGroup) -> list[LedgerAccount]:
-        return [a for a in self.accounts if a.group == group]
+from .journal import to_journal_entries, close_books, ClosingResult
+from .general_ledger_class import GeneralLedger
     
 
 def trial_balance(gl: GeneralLedger, as_on: Optional[date] = None) -> TrialBalance:
@@ -260,19 +201,32 @@ def creditors_ageing(gl: GeneralLedger, as_on: Optional[date] = None) -> list[Ag
 
 
 def build_ledger(
-    bills: list[dict],
-    opening_balances: Optional[list[JournalEntry]] = None,
-) -> tuple[GeneralLedger, list[JournalEntry]]:
+    bills:              list[dict],
+    opening_balances:   Optional[list[JournalEntry]] = None,
+    _prebuilt_entries:  Optional[list[JournalEntry]] = None,
+    close_books_on:     Optional[date]               = None,
+    period_label:       str                          = "",
+) -> tuple[GeneralLedger, list[JournalEntry], Optional[ClosingResult]]:
     """
-    Full pipeline: bills → journal entries → general ledger.
+    Full pipeline: bills → journal entries → general ledger → (optional) closing.
+
     Args:
-        bills            : list of bill dicts from excel.scan_all()
-        opening_balances : optional list of JournalEntry objects representing
-                           opening balance postings (from opening_balances.py).
-                           These are posted first, before transaction entries.
+        bills             : list of bill dicts from excel.scan_all()
+        opening_balances  : optional list of JournalEntry objects for opening balances
+                            (from opening_balances.py). Posted first.
+        _prebuilt_entries : TDS-modified entries from __init__.py pipeline.
+                            When supplied, bills are ignored (already converted).
+        close_books_on    : If provided, run close_books() after posting all entries
+                            and also post the closing entries to the GL.
+                            Should be the last date of the financial year,
+                            e.g. date(2026, 3, 31).
+        period_label      : Human-readable FY label for closing entry narrations,
+                            e.g. "FY 2025-26".
+
     Returns:
-        gl      : the populated GeneralLedger
-        entries : all JournalEntry objects in date order (audit trail)
+        gl              : the populated GeneralLedger (includes closing entries if requested)
+        all_entries     : all JournalEntry objects in date order (audit trail)
+        closing_result  : ClosingResult if close_books_on was supplied, else None.
     """
     gl          = GeneralLedger()
     all_entries : list[JournalEntry] = []
@@ -282,12 +236,25 @@ def build_ledger(
         gl.post_entries(opening_balances)
         all_entries.extend(opening_balances)
 
-    # Post transaction entries from scanned bills
-    tx_entries = to_journal_entries(bills)
+    # Use pre-built (TDS-modified) entries if available, otherwise convert bills
+    if _prebuilt_entries is not None:
+        tx_entries = _prebuilt_entries
+    else:
+        tx_entries = to_journal_entries(bills)
+
     gl.post_entries(tx_entries)
     all_entries.extend(tx_entries)
 
-    # Sort full audit trail by date
+    # Sort full audit trail by date (before closing entries)
     all_entries.sort(key=lambda e: e.date)
 
-    return gl, all_entries
+    # Optional year-end closing
+    closing_result: Optional[ClosingResult] = None
+    if close_books_on is not None:
+        closing_result = close_books(gl, close_books_on, period_label)
+        if closing_result.entries:
+            gl.post_entries(closing_result.entries)
+            all_entries.extend(closing_result.entries)
+            # Closing entries are dated period_end so they naturally sort last
+
+    return gl, all_entries, closing_result

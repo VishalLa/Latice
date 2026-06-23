@@ -1,6 +1,6 @@
 from __future__ import annotations 
 
-from loader import load_bank_statement, load_ledger_csv
+from entry_point.loader import load_bank_statement, load_ledger_csv
 from schema import BankTemplate
 from schema.template import TEMPLATE_REGISTRY
 

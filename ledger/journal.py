@@ -23,6 +23,7 @@ Chart of Accounts follows the standard Indian format used in Tally ERP:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, date
 from typing import Optional
 from dateutil import parser as dateparser
@@ -33,8 +34,10 @@ from schema import (
     Account, 
     COA, 
     EntryLine, 
-    JournalEntry
+    JournalEntry,
+    ClosingResult,
 )
+from .general_ledger_class import GeneralLedger
 
 
 # DATE NORMALISATION
@@ -521,214 +524,206 @@ def gst_settlement_entry(
 
 # YEAR-END CLOSING ENTRIES
 def close_books(
-    gl,                      # GeneralLedger — passed in to avoid circular import
+    gl: GeneralLedger,
     period_end: date,
     period_label: str = "",
-) -> list["JournalEntry"]:
+) -> ClosingResult:
     """
-    Generate year-end closing journal entries.
+    Generate year-end closing journal entries per Indian double-entry convention.
 
-    In Indian double-entry bookkeeping, at period-end all nominal accounts
-    (P&L accounts — Sales, Purchases, Income, Expenses) are closed to
-    Trading A/c → P&L A/c → Capital A/c.  Only real accounts (assets,
-    liabilities, capital) carry forward to the next period.
+    At period-end all nominal accounts (P&L — Sales, Purchases, Income,
+    Expenses) are closed to Trading A/c → P&L A/c → Capital A/c.
+    Only real accounts (assets, liabilities, capital) carry forward.
 
-    Entry sequence:
-      1. Close all Sales & Direct Income → Trading A/c (Credit side)
-      2. Close all Purchases & Direct Expenses → Trading A/c (Debit side)
-      3. Transfer Gross Profit/Loss from Trading A/c → P&L A/c
-      4. Close Indirect Income → P&L A/c (Credit side)
-      5. Close Indirect Expenses → P&L A/c (Debit side)
-      6. Transfer Net Profit/Loss from P&L A/c → Capital A/c
+    Entry sequence
+    --------------
+    1. Dr Sales & Direct Income  /  Cr Trading A/c
+    2. Dr Trading A/c            /  Cr Purchases & Direct Expenses
+    3. Transfer Gross Profit (or Loss) Trading A/c ↔ P&L A/c
+    4. Dr Indirect Income        /  Cr P&L A/c
+    5. Dr P&L A/c               /  Cr Indirect Expenses
+    6. Transfer Net Profit (or Loss) P&L A/c → Capital A/c
 
-    Args:
-        gl           : GeneralLedger (from Ledger.py build_ledger())
-        period_end   : Last date of the accounting period (e.g. 31-Mar-2026)
-        period_label : Human-readable period label for narration
+    Args
+    ----
+    gl           : GeneralLedger populated with all normal entries for the period.
+    period_end   : Last date of the accounting period (e.g. date(2026, 3, 31)).
+    period_label : Human-readable period label for narration suffixes.
 
-    Returns:
-        list[JournalEntry] — Closing entries ready to be posted to the GL.
-        After posting, all P&L accounts will have zero balance.
+    Returns
+    -------
+    ClosingResult
+        .entries      — closing JournalEntry objects ready to post to the GL.
+        .gross_profit — computed gross profit (negative = gross loss).
+        .net_profit   — computed net profit (negative = net loss).
+        .warnings     — list of non-fatal anomaly strings.
+
+    After posting .entries, all P&L account balances become zero.
     """
-    entries: list[JournalEntry] = []
-    suffix  = f" — {period_label}" if period_label else ""
+    warnings: list[str] = []
+    entries:  list[JournalEntry] = []
+    suffix    = f" — {period_label}" if period_label else ""
 
-    # Internal transfer accounts (not in COA as they cancel each other)
-    TRADING_AC = Account("Trading A/c",          AccountGroup.RESERVES_SURPLUS)
-    PL_AC      = Account("Profit & Loss A/c",    AccountGroup.RESERVES_SURPLUS)
+    # Internal transfer accounts (self-cancelling; not in COA)
+    TRADING_AC = Account("Trading A/c",       AccountGroup.RESERVES_SURPLUS)
+    PL_AC      = Account("Profit & Loss A/c", AccountGroup.RESERVES_SURPLUS)
 
-    # Helper: get closing balance of a group (positive float = Dr balance)
+    # ── Helper: snapshot closing balances for a group (called once, before posting)
     def group_bal(group: AccountGroup) -> dict[str, float]:
-        """Return {account_name: balance} for all accounts in a group."""
-        result = {}
+        """Return {account_name: closing_balance_abs} for non-zero accounts."""
+        result: dict[str, float] = {}
         for acc in gl.accounts_in_group(group):
             amt, _ = acc.closing_balance
             if abs(amt) > 0.005:
                 result[acc.name] = round(amt, 2)
         return result
 
-    def make_account(name: str, group: AccountGroup) -> Account:
-        return Account(name, group)
+    def resolve_group(name: str, primary: AccountGroup, fallback: AccountGroup) -> AccountGroup:
+        """Pick the right AccountGroup for an account by its name."""
+        acc = gl.get(name)
+        if acc:
+            return acc.group
+        return primary if name in group_bal(primary) else fallback
 
-    # ── Step 1: Close Sales Accounts → Trading A/c (Dr Sales / Cr Trading)
-    sales_bals = {**group_bal(AccountGroup.SALES_ACCOUNTS), **group_bal(AccountGroup.DIRECT_INCOME)}
-    if sales_bals:
-        lines = []
-        total = 0.0
-        for acc_name, bal in sales_bals.items():
-            if bal > 0:
-                # Sales/Income accounts normally have Cr balance;
-                # to close, Debit them
-                lines.append(EntryLine(
-                    make_account(acc_name,
-                        AccountGroup.SALES_ACCOUNTS if "Sales" in acc_name
-                        else AccountGroup.DIRECT_INCOME),
-                    DrCr.DEBIT, bal,
-                    f"Closing {acc_name} to Trading A/c",
-                ))
-
-                total += bal
-
-        if lines and total > 0:
-            lines.append(EntryLine(TRADING_AC, DrCr.CREDIT, round(total, 2), "Transfer of Sales & Direct Income to Trading A/c"))
-            entries.append(JournalEntry(
-                date         = period_end,
-                voucher_type = "Journal Voucher",
-                narration    = f"Closing Sales & Direct Income to Trading A/c{suffix}",
-                lines        = lines,
-            ))
-
-    # ── Step 2: Close Purchase & Direct Expenses → Trading A/c
+    # ── Snapshot all P&L balances before generating any entries
+    sales_bals    = {**group_bal(AccountGroup.SALES_ACCOUNTS), **group_bal(AccountGroup.DIRECT_INCOME)}
     purchase_bals = {**group_bal(AccountGroup.PURCHASE_ACCOUNTS), **group_bal(AccountGroup.DIRECT_EXPENSES)}
+    indir_inc_bals = group_bal(AccountGroup.INDIRECT_INCOME)
+    indir_exp_bals = group_bal(AccountGroup.INDIRECT_EXPENSES)
+
+    # Pre-compute totals from snapshots (GL is not yet mutated)
+    sales_total    = round(sum(sales_bals.values()),     2)
+    purchase_total = round(sum(purchase_bals.values()),  2)
+    indir_inc_total = round(sum(indir_inc_bals.values()), 2)
+    indir_exp_total = round(sum(indir_exp_bals.values()), 2)
+    gross_profit   = round(sales_total - purchase_total, 2)
+    net_profit     = round(gross_profit + indir_inc_total - indir_exp_total, 2)
+
+    if not sales_bals and not purchase_bals and not indir_inc_bals and not indir_exp_bals:
+        warnings.append("No nominal account balances found — nothing to close.")
+        return ClosingResult(
+            entries=[], gross_profit=0.0, net_profit=0.0,
+            period_end=period_end, period_label=period_label, warnings=warnings,
+        )
+
+    # ── Step 1: Close Sales & Direct Income → Trading A/c
+    #    Normal balance of Sales/Income is Credit → debit them to close.
+    if sales_bals:
+        lines: list[EntryLine] = []
+        for acc_name, bal in sales_bals.items():
+            acc_obj = gl.get(acc_name)
+            group   = acc_obj.group if acc_obj else AccountGroup.SALES_ACCOUNTS
+            lines.append(EntryLine(
+                Account(acc_name, group), DrCr.DEBIT, bal,
+                f"Closing {acc_name} to Trading A/c",
+            ))
+        lines.append(EntryLine(
+            TRADING_AC, DrCr.CREDIT, round(sales_total, 2),
+            "Transfer of Sales & Direct Income to Trading A/c",
+        ))
+        entries.append(JournalEntry(
+            date         = period_end,
+            voucher_type = "Journal Voucher",
+            narration    = f"Closing Sales & Direct Income to Trading A/c{suffix}",
+            lines        = lines,
+        ))
+
+    # ── Step 2: Close Purchases & Direct Expenses → Trading A/c
+    #    Normal balance of Purchases/Expenses is Debit → credit them to close.
     if purchase_bals:
-        lines = []
-        total = 0.0
+        lines = [
+            EntryLine(TRADING_AC, DrCr.DEBIT, round(purchase_total, 2),
+                      "Transfer of Purchases & Direct Expenses to Trading A/c"),
+        ]
         for acc_name, bal in purchase_bals.items():
-            if bal > 0:
-                lines.append(EntryLine(TRADING_AC, DrCr.DEBIT, bal, f"Closing {acc_name} to Trading A/c"))
-                total += bal
+            acc_obj = gl.get(acc_name)
+            group   = acc_obj.group if acc_obj else AccountGroup.PURCHASE_ACCOUNTS
+            lines.append(EntryLine(
+                Account(acc_name, group), DrCr.CREDIT, bal,
+                f"Closing {acc_name} to Trading A/c",
+            ))
+        entries.append(JournalEntry(
+            date         = period_end,
+            voucher_type = "Journal Voucher",
+            narration    = f"Closing Purchases & Direct Expenses to Trading A/c{suffix}",
+            lines        = lines,
+        ))
 
-        if lines and total > 0:
-            for acc_name, bal in purchase_bals.items():
-                if bal > 0:
-                    lines.insert(
-                        len(lines) - len([x for x in lines if x.account == TRADING_AC]),
-                        EntryLine(
-                            make_account(acc_name,
-                                AccountGroup.PURCHASE_ACCOUNTS if "Purchase" in acc_name
-                                else AccountGroup.DIRECT_EXPENSES),
-                            DrCr.CREDIT, bal,
-                            f"Closing {acc_name} to Trading A/c",
-                        )
-                    )
-            
-            # Rebuild correctly: Cr Purchases/Direct Exp, Dr Trading
-            lines = []
-            t = 0.0
-            for acc_name, bal in purchase_bals.items():
-                if bal > 0:
-                    lines.append(EntryLine(
-                        make_account(acc_name,
-                            AccountGroup.PURCHASE_ACCOUNTS if "Purchase" in acc_name
-                            else AccountGroup.DIRECT_EXPENSES),
-                        DrCr.CREDIT, bal,
-                        f"Closing {acc_name}",
-                    ))
-                    t += bal
-
-            if t > 0:
-                lines.insert(0, EntryLine(TRADING_AC, DrCr.DEBIT, round(t, 2), "Transfer of Purchases & Direct Expenses to Trading A/c"))
-                entries.append(JournalEntry(
-                    date         = period_end,
-                    voucher_type = "Journal Voucher",
-                    narration    = f"Closing Purchases & Direct Expenses to Trading A/c{suffix}",
-                    lines        = lines,
-                ))
-
-    # ── Step 3: Gross Profit/Loss from Trading A/c → P&L A/c
-    # Trading A/c balance after steps 1 & 2:
-    # Sales+DirInc − Purchases−DirExp = Gross Profit (Cr if positive)
-    sales_total = sum(v for v in (group_bal(AccountGroup.SALES_ACCOUNTS).values()))
-    sales_total += sum(v for v in (group_bal(AccountGroup.DIRECT_INCOME).values()))
-    purch_total = sum(v for v in (group_bal(AccountGroup.PURCHASE_ACCOUNTS).values()))
-    purch_total += sum(v for v in (group_bal(AccountGroup.DIRECT_EXPENSES).values()))
-    gross_profit = round(sales_total - purch_total, 2)
-
+    # ── Step 3: Transfer Gross Profit / Loss from Trading A/c → P&L A/c
     if abs(gross_profit) > 0.005:
         if gross_profit > 0:
-            # Gross Profit: Dr Trading A/c → Cr P&L A/c
+            # Gross Profit — Dr Trading A/c, Cr P&L A/c
             entries.append(JournalEntry(
                 date         = period_end,
                 voucher_type = "Journal Voucher",
                 narration    = f"Transfer of Gross Profit to Profit & Loss A/c{suffix}",
                 lines        = [
-                    EntryLine(TRADING_AC, DrCr.DEBIT,  gross_profit, "Gross Profit transferred to P&L A/c"),
-                    EntryLine(PL_AC,      DrCr.CREDIT, gross_profit, "Gross Profit b/d from Trading A/c"),
+                    EntryLine(TRADING_AC, DrCr.DEBIT,  gross_profit,
+                              "Gross Profit transferred to P&L A/c"),
+                    EntryLine(PL_AC,      DrCr.CREDIT, gross_profit,
+                              "Gross Profit b/d from Trading A/c"),
                 ],
             ))
         else:
-            # Gross Loss: Dr P&L A/c → Cr Trading A/c
+            # Gross Loss — Dr P&L A/c, Cr Trading A/c
             entries.append(JournalEntry(
                 date         = period_end,
                 voucher_type = "Journal Voucher",
                 narration    = f"Transfer of Gross Loss to Profit & Loss A/c{suffix}",
                 lines        = [
-                    EntryLine(PL_AC,      DrCr.DEBIT,  abs(gross_profit), "Gross Loss b/d from Trading A/c"),
-                    EntryLine(TRADING_AC, DrCr.CREDIT, abs(gross_profit), "Gross Loss transferred to P&L A/c"),
+                    EntryLine(PL_AC,      DrCr.DEBIT,  abs(gross_profit),
+                              "Gross Loss b/d from Trading A/c"),
+                    EntryLine(TRADING_AC, DrCr.CREDIT, abs(gross_profit),
+                              "Gross Loss transferred to P&L A/c"),
                 ],
             ))
+    else:
+        warnings.append("Gross Profit/Loss is zero — Trading A/c entry skipped.")
 
     # ── Step 4: Close Indirect Income → P&L A/c
-    indir_inc_bals = group_bal(AccountGroup.INDIRECT_INCOME)
+    #    Normal balance of Indirect Income is Credit → debit to close.
     if indir_inc_bals:
         lines = []
-        total = 0.0
         for acc_name, bal in indir_inc_bals.items():
-            if bal > 0:
-                lines.append(EntryLine(
-                    make_account(acc_name, AccountGroup.INDIRECT_INCOME),
-                    DrCr.DEBIT, bal,
-                    f"Closing {acc_name} to P&L A/c",
-                ))
-                total += bal
-
-        if lines and total > 0:
-            lines.append(EntryLine(PL_AC, DrCr.CREDIT, round(total, 2), "Transfer of Indirect Income to P&L A/c"))
-            entries.append(JournalEntry(
-                date         = period_end,
-                voucher_type = "Journal Voucher",
-                narration    = f"Closing Indirect Income to Profit & Loss A/c{suffix}",
-                lines        = lines,
+            acc_obj = gl.get(acc_name)
+            group   = acc_obj.group if acc_obj else AccountGroup.INDIRECT_INCOME
+            lines.append(EntryLine(
+                Account(acc_name, group), DrCr.DEBIT, bal,
+                f"Closing {acc_name} to P&L A/c",
             ))
+        lines.append(EntryLine(
+            PL_AC, DrCr.CREDIT, round(indir_inc_total, 2),
+            "Transfer of Indirect Income to P&L A/c",
+        ))
+        entries.append(JournalEntry(
+            date         = period_end,
+            voucher_type = "Journal Voucher",
+            narration    = f"Closing Indirect Income to Profit & Loss A/c{suffix}",
+            lines        = lines,
+        ))
 
     # ── Step 5: Close Indirect Expenses → P&L A/c
-    indir_exp_bals = group_bal(AccountGroup.INDIRECT_EXPENSES)
+    #    Normal balance of Indirect Expenses is Debit → credit to close.
     if indir_exp_bals:
-        lines = []
-        total = 0.0
+        lines = [
+            EntryLine(PL_AC, DrCr.DEBIT, round(indir_exp_total, 2),
+                      "Transfer of Indirect Expenses to P&L A/c"),
+        ]
         for acc_name, bal in indir_exp_bals.items():
-            if bal > 0:
-                lines.append(EntryLine(
-                    make_account(acc_name, AccountGroup.INDIRECT_EXPENSES),
-                    DrCr.CREDIT, bal,
-                    f"Closing {acc_name}",
-                ))
-                total += bal
-        if lines and total > 0:
-            lines.insert(0, EntryLine(PL_AC, DrCr.DEBIT, round(total, 2),
-                                      "Transfer of Indirect Expenses from P&L A/c"))
-            entries.append(JournalEntry(
-                date         = period_end,
-                voucher_type = "Journal Voucher",
-                narration    = f"Closing Indirect Expenses to Profit & Loss A/c{suffix}",
-                lines        = lines,
+            acc_obj = gl.get(acc_name)
+            group   = acc_obj.group if acc_obj else AccountGroup.INDIRECT_EXPENSES
+            lines.append(EntryLine(
+                Account(acc_name, group), DrCr.CREDIT, bal,
+                f"Closing {acc_name} to P&L A/c",
             ))
+        entries.append(JournalEntry(
+            date         = period_end,
+            voucher_type = "Journal Voucher",
+            narration    = f"Closing Indirect Expenses to Profit & Loss A/c{suffix}",
+            lines        = lines,
+        ))
 
-    # ── Step 6: Transfer Net Profit/Loss → Capital A/c
-    indir_inc_total = sum(v for v in indir_inc_bals.values())
-    indir_exp_total = sum(v for v in indir_exp_bals.values())
-    net_profit = round(gross_profit + indir_inc_total - indir_exp_total, 2)
-
+    # ── Step 6: Transfer Net Profit / Loss from P&L A/c → Capital A/c
     if abs(net_profit) > 0.005:
         if net_profit > 0:
             entries.append(JournalEntry(
@@ -736,8 +731,10 @@ def close_books(
                 voucher_type = "Journal Voucher",
                 narration    = f"Transfer of Net Profit to Capital A/c{suffix}",
                 lines        = [
-                    EntryLine(PL_AC,      DrCr.DEBIT,  net_profit, "Net Profit transferred to Capital A/c"),
-                    EntryLine(COA.CAPITAL, DrCr.CREDIT, net_profit, "Net Profit added to Capital (owner's equity increases)"),
+                    EntryLine(PL_AC,       DrCr.DEBIT,  net_profit,
+                              "Net Profit transferred to Capital A/c"),
+                    EntryLine(COA.CAPITAL, DrCr.CREDIT, net_profit,
+                              "Net Profit added to Capital (owner's equity increases)"),
                 ],
             ))
         else:
@@ -746,9 +743,20 @@ def close_books(
                 voucher_type = "Journal Voucher",
                 narration    = f"Transfer of Net Loss to Capital A/c{suffix}",
                 lines        = [
-                    EntryLine(COA.CAPITAL, DrCr.DEBIT,  abs(net_profit), "Net Loss deducted from Capital (owner's equity decreases)"),
-                    EntryLine(PL_AC,       DrCr.CREDIT, abs(net_profit), "Net Loss transferred from P&L A/c"),
+                    EntryLine(COA.CAPITAL, DrCr.DEBIT,  abs(net_profit),
+                              "Net Loss deducted from Capital (owner's equity decreases)"),
+                    EntryLine(PL_AC,       DrCr.CREDIT, abs(net_profit),
+                              "Net Loss transferred from P&L A/c"),
                 ],
             ))
+    else:
+        warnings.append("Net Profit/Loss is zero — Capital A/c transfer entry skipped.")
 
-    return entries
+    return ClosingResult(
+        entries      = entries,
+        gross_profit = gross_profit,
+        net_profit   = net_profit,
+        period_end   = period_end,
+        period_label = period_label,
+        warnings     = warnings,
+    )

@@ -1,4 +1,4 @@
-from .unified_schema import BankTemplate 
+from .bank_renc_schema import BankTemplate 
 from typing import List, Dict
 
 

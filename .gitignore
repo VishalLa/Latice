@@ -17,3 +17,5 @@ old/
 
 *.env
 
+*.safetensors
+*.model

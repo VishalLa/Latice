@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import uuid
 from datetime import date, datetime
 from typing import List, Optional
 
 from sqlalchemy import (
     JSON,
-    Boolean,
     Date,
     DateTime,
     Float,
@@ -18,22 +16,12 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import (
-    DeclarativeBase,
     Mapped,
     mapped_column,
     relationship,
 )
+from .base import _uuid, Base
 
-
-class Base(DeclarativeBase):
-    pass
-
-
-def _uuid() -> str:
-    return str(uuid.uuid4())
-
-
-# ── Bill Scanning ─────────────────────────────────────────────────────────────
 
 class ScannedBill(Base):
     """
@@ -117,7 +105,7 @@ class BillLineItem(Base):
 class Account(Base):
     """
     A single ledger account in the Chart of Accounts.
-    Maps to the Account dataclass in unified_schema.py.
+    Maps to the Account dataclass.
     """
     __tablename__ = "account"
 

@@ -15,6 +15,8 @@ def exact_matcher(
     same_sid: bool = True   # True = cashbook, False = standard GL
 ) -> dict: 
     
+    print("Exact Match")
+    
     ledger_used = [False] * len(gl_records)
     bank_used = [False] * len(bank_records)
     exact_matches: List[dict] = []

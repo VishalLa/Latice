@@ -1,138 +1,157 @@
-from __future__ import annotations 
+from __future__ import annotations
 
+import sys
 from entry_point.loader import load_bank_statement, load_ledger_csv
-from schema import BankTemplate
-from schema.template import TEMPLATE_REGISTRY
-
 from matcher import reconcile
 
 
-def main(
-    ledger_csv_path: str,
-    bank_csv_path: str,
-    ledger_date_format: str = "%d-%m-%Y",
-    bank_template_key: str = None,
-) -> dict:
-    all_warnings = []
+def print_reconciliation_results(results: dict) -> None:
+    """Safely prints reconciliation results to the terminal with strict alignment."""
+    try:
+        print("\n" + "=" * 60)
+        print("🏦 BANK RECONCILIATION REPORT")
+        print("=" * 60)
 
-    # Load ledger
-    ledger_result = load_ledger_csv(ledger_csv_path, date_format=ledger_date_format)
-    all_warnings.extend(f"[ledger] {w}" for w in ledger_result["warnings"])
+        # ── SUMMARY ───────────────────────────────────────────────────────
+        summary = results.get("summary", {})
+        print("\n📊 SUMMARY:")
+        print("-" * 40)
+        for key, val in summary.items():
+            label = key.replace("_", " ").title()
+            print(f"  {label:<26}: {val}")
 
-    # Load bank statement (with optional template)
-    bank_template = None
-    if bank_template_key:
-        cfg = TEMPLATE_REGISTRY.get(bank_template_key.upper())
-        if not cfg:
-            return {
-                "error": (
-                    f"Unknown bank template key '{bank_template_key}'. "
-                    f"Known keys: {list(TEMPLATE_REGISTRY)}"
-                )
-            }
-        bank_template = BankTemplate(**cfg)
+        # ── EXACT MATCHES ─────────────────────────────────────────────────
+        print("\n✅ EXACT MATCHES:")
+        print("-" * 40)
+        exact = results.get("EXACT_MATCHES", [])
+        if not exact:
+            print("  No exact matches found.")
+        for m in exact:
+            lid = m.get("ledger_id", "N/A")
+            bid = str(m.get("bank_id", "N/A"))
+            amt = float(m.get("amount", 0.0))
+            dte = m.get("date", "N/A")
+            ref = "✓ Ref" if m.get("reference_matched") else "  Amt"
+            print(f"  [{ref}] [Ledger: {lid:>6}] <-> [Bank Row: {bid:>3}] | Amount: {amt:>12,.2f} | Date: {dte}")
 
-    bank_result = load_bank_statement(bank_csv_path, template=bank_template)
-    all_warnings.extend(f"[bank] {w}" for w in bank_result["warnings"])
+        # ── FUZZY MATCHES ─────────────────────────────────────────────────
+        print("\n⚠️  FUZZY MATCHES:")
+        print("-" * 40)
+        fuzzy = results.get("FUZZY_MATCHES", [])
+        if not fuzzy:
+            print("  No fuzzy matches found.")
+        for m in fuzzy:
+            lid    = str(m.get("ledger_id", "None"))
+            bid    = str(m.get("bank_id", "N/A"))
+            atype  = m.get("adjustment_type", "Unknown")
+            conf   = m.get("confidence_score", "N/A")
+            detail = m.get("details", "")
+            print(f"  [Ledger: {lid:>6}] <-> [Bank Row: {bid:>3}] | Type: {atype} ({conf})")
+            if detail:
+                print(f"      -> Reason: {detail}")
 
-    result = reconcile(
-        ledger_result=ledger_result,
-        bank_result=bank_result,
-        all_warnings=all_warnings
-    )
+        # ── AI NEW MATCHES (residuals the AI found) ───────────────────────
+        print("\n🤖 AI AGENT — New Matches:")
+        print("-" * 40)
 
-    return result
+        ai_1to1 = results.get("AI_MATCHES", [])
+        ai_many = [m for m in (results.get("AI_AGENT", []) or []) if "ledger_ids" in m]
 
+        if not ai_1to1 and not ai_many:
+            unr_l = results.get("UNRECONCILED_ITEMS", {}).get("ledger", [])
+            unr_b = results.get("UNRECONCILED_ITEMS", {}).get("bank",   [])
+            if not unr_l and not unr_b:
+                print("  ℹ️  Exact + Fuzzy matchers reconciled everything.")
+                print("     AI matcher had no residuals to process.")
+            else:
+                print("  ⚠️  AI matcher ran but found no additional matches.")
+        else:
+            if ai_1to1:
+                print(f"  — 1-to-1 Semantic Matches ({len(ai_1to1)}) —")
+            for m in ai_1to1:
+                lid  = str(m.get("ledger_id", "N/A"))
+                bid  = str(m.get("bank_id",   "N/A"))
+                conf = m.get("confidence", 0.0)
+                rsn  = m.get("reasoning", "")
+                print(f"  [Ledger: {lid:>6}] <-> [Bank Row: {bid:>3}] | Conf: {conf:.0%}")
+                if rsn:
+                    print(f"      -> {rsn}")
 
-def print_reconciliation_results(results: dict):
-    """
-    Helper function to cleanly print the reconciliation results to the terminal.
-    """
-    print("\n" + "="*50)
-    print("🏦 BANK RECONCILIATION REPORT")
-    print("="*50)
+            if ai_many:
+                print(f"\n  — 1-to-Many Matches ({len(ai_many)}) —")
+            for m in ai_many:
+                bid      = str(m.get("bank_id", "N/A"))
+                lids_raw = m.get("ledger_ids", [])
+                if lids_raw and isinstance(lids_raw[0], dict):
+                    lids = ", ".join(x.get("ledger_id", "?") for x in lids_raw)
+                else:
+                    lids = ", ".join(str(x) for x in lids_raw)
+                conf = m.get("confidence", 0.0)
+                rsn  = m.get("reasoning", "")
+                print(f"  [Ledgers: {lids}] <-> [Bank Row: {bid:>3}] | Conf: {conf:.0%}")
+                if rsn:
+                    print(f"      -> {rsn}")
 
-    # 1. SUMMARY
-    print("\n📊 SUMMARY:")
-    print("-" * 30)
-    summary = results.get("summary", {})
-    for key, value in summary.items():
-        # Format the keys to look nice (e.g., 'unreconciled_ledger' -> 'Unreconciled Ledger')
-        clean_key = key.replace("_", " ").title()
-        print(f"  {clean_key:<22}: {value}")
+        # ── UNRECONCILED LEDGER ───────────────────────────────────────────
+        print("\n❌ UNRECONCILED LEDGER (Leftovers):")
+        print("-" * 40)
+        unrec_ledger = results.get("UNRECONCILED_ITEMS", {}).get("ledger", [])
+        if not unrec_ledger:
+            print("  ✅ All ledger items reconciled!")
+        for gl in unrec_ledger:
+            debit  = getattr(gl, "debit_amount",  0.0)
+            credit = getattr(gl, "credit_amount", 0.0)
+            amt      = debit if debit > 0 else (credit if credit > 0 else 0.0)
+            txn_type = "DR (Out)" if debit > 0 else ("CR (In)" if credit > 0 else "N/A")
+            dte      = str(getattr(gl, "transaction_date", "N/A"))
+            name     = getattr(gl, "account_name", "N/A")
+            lid      = getattr(gl, "ledger_id", "N/A")
+            print(f"  [{lid:>6}] Date: {dte:<10} | {txn_type:<8} {amt:>12,.2f} | Name: {name}")
 
-    # 2. EXACT MATCHES
-    print("\n✅ EXACT MATCHES:")
-    print("-" * 30)
-    exact = results.get("EXACT_MATCHES", [])
-    if not exact:
-        print("  No exact matches found.")
-    for m in exact:
-        print(f"  [Ledger: {m['ledger_id']:>6}] <-> [Bank Row: {m['bank_id']:>3}] | Amount: {m['amount']:>9.2f} | Date: {m['date']}")
+        # ── UNRECONCILED BANK ─────────────────────────────────────────────
+        print("\n❌ UNRECONCILED BANK (Leftovers):")
+        print("-" * 40)
+        unrec_bank = results.get("UNRECONCILED_ITEMS", {}).get("bank", [])
+        if not unrec_bank:
+            print("  ✅ All bank items reconciled!")
+        for b in unrec_bank:
+            debit  = getattr(b, "debit",  0.0)
+            credit = getattr(b, "credit", 0.0)
+            amt      = debit if debit > 0 else (credit if credit > 0 else 0.0)
+            txn_type = "DR (Out)" if debit > 0 else ("CR (In)" if credit > 0 else "N/A")
+            dte      = str(getattr(b, "date", "N/A"))
+            narr     = (getattr(b, "narration", "") or "N/A")[:45]
+            bid      = getattr(b, "row_index", "N/A")
+            print(f"  [Row: {bid:>3}] Date: {dte:<10} | {txn_type:<8} {amt:>12,.2f} | Narration: {narr}")
 
-    # 3. FUZZY MATCHES
-    print("\n⚠️  FUZZY MATCHES:")
-    print("-" * 30)
-    fuzzy = results.get("FUZZY_MATCHES", [])
-    if not fuzzy:
-        print("  No fuzzy matches found.")
-    for m in fuzzy:
-        lid = m['ledger_id'] if m['ledger_id'] else "None"
-        print(f"  [Ledger: {lid:>6}] <-> [Bank Row: {m['bank_id']:>3}] | Type: {m['adjustment_type']} ({m['confidence_score']})")
-        print(f"      -> Reason: {m['details']}")
+        # ── WARNINGS ──────────────────────────────────────────────────────
+        warnings = results.get("warnings", [])
+        if warnings:
+            print("\n🚨 WARNINGS:")
+            print("-" * 40)
+            for w in warnings:
+                print(f"  - {w}")
 
-    # 4. AI AGENT QUEUE / MATCHES
-    print("\n🤖 AI AGENT LAYER:")
-    print("-" * 30)
-    ai_agent = results.get("AI_AGENT", [])
-    if not ai_agent:
-        print("  No AI Agent items/matches.")
-    for m in ai_agent:
-        lid = m.get('ledger_id', 'None')
-        reason = m.get('details', m.get('reason', 'No details provided'))
-        print(f"  [Ledger: {lid:>6}] <-> [Bank Row: {m.get('bank_id', 'N/A'):>3}] | Type: {m.get('adjustment_type', 'AI Match')}")
-        print(f"      -> Reason: {reason}")
+        print("\n" + "=" * 60 + "\n")
 
-    # 5. UNRECONCILED LEDGER
-    print("\n❌ UNRECONCILED LEDGER (Leftovers):")
-    print("-" * 30)
-    unrec_ledger = results.get("UNRECONCILED_ITEMS", {}).get("ledger", [])
-    if not unrec_ledger:
-        print("  All ledger items reconciled!")
-    for gl in unrec_ledger:
-        # Check if debit or credit to display amount correctly
-        amount = gl.debit_amount if gl.debit_amount > 0 else gl.credit_amount
-        txn_type = "DR (In)" if gl.debit_amount > 0 else "CR (Out)"
-        print(f"  [{gl.ledger_id:>6}] Date: {str(gl.transaction_date):<10} | {txn_type} {amount:>9.2f} | Name: {gl.account_name}")
-
-    # 6. UNRECONCILED BANK
-    print("\n❌ UNRECONCILED BANK (Leftovers):")
-    print("-" * 30)
-    unrec_bank = results.get("UNRECONCILED_ITEMS", {}).get("bank", [])
-    if not unrec_bank:
-        print("  All bank items reconciled!")
-    for b in unrec_bank:
-        amount = b.debit if b.debit > 0 else b.credit
-        txn_type = "DR (Out)" if b.debit > 0 else "CR (In)"
-        print(f"  [Row: {b.row_index:>3}] Date: {str(b.date):<10} | {txn_type} {amount:>9.2f} | Narration: {b.narration[:40]}")
-
-    # 7. WARNINGS
-    warnings = results.get("warnings", [])
-    if warnings:
-        print("\n🚨 WARNINGS:")
-        print("-" * 30)
-        for w in warnings:
-            print(f"  - {w}")
-    
-    print("\n" + "="*50 + "\n")
+    except Exception as e:
+        print(f"\n❌ Error printing reconciliation results: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
-    results = main(
-        bank_csv_path=r"Bank.csv",
-        ledger_csv_path=r"Ledger.csv",
-        ledger_date_format="%Y-%m-%d"
-    )
-    
-    print_reconciliation_results(results)
+    bank_statement_result = load_bank_statement(filepath=r"Bank.csv")
+    ledger_result = load_ledger_csv(filepath=r"Ledger.csv")
 
+    results = reconcile(
+        ledger_result=ledger_result,
+        bank_result=bank_statement_result,
+        all_warnings=(
+            ledger_result.get("warnings", []) +
+            bank_statement_result.get("warnings", [])
+        ),
+    )
+
+    print_reconciliation_results(results)
+    

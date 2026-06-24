@@ -193,3 +193,24 @@ class LedgerFormat:
         }
 
 
+@dataclass
+class IgnoredMetadataRecord:
+    """A zero-amount record silently dropped before matching begins."""
+    source:     str          # "bank" | "ledger"
+    row_ref:    str          # row_index (bank) or ledger_id (ledger)
+    narration:  str
+    reason:     str = "Zero-amount metadata / header row — excluded from reconciliation."
+
+
+@dataclass
+class AuditInvestigationItem:
+    """A bank row flagged for manual GL journal entry; not force-matched."""
+    bank_row_index: int
+    narration:      str
+    amount:         float
+    direction:      str      # "debit" | "credit"
+    flag_reason:    str
+    action_required: str = (
+        "Bank Reversal detected; requires manual General Ledger journal entry."
+    )
+

@@ -53,7 +53,7 @@ from datetime import date
 from enum import Enum
 from typing import Dict, List, Optional
 
-from .ledger_schema import JournalEntry
+from .journal_schema import JournalEntry
 
 
 class DeducteeType(Enum):

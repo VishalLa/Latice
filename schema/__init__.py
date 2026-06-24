@@ -22,7 +22,9 @@ from .bank_renc_schema import (
     BankStatement,
     BankTemplate,
     LedgerFormat,
-    LedgerSource
+    LedgerSource,
+    IgnoredMetadataRecord,
+    AuditInvestigationItem
 )
 
 from .tds_schema import (
@@ -63,6 +65,8 @@ __all__ = [
     "BankStatement",
     "LedgerSource",
     "LedgerFormat",
+    "IgnoredMetadataRecord",
+    "AuditInvestigationItem",
 
     # TDS
     "DeducteeType",

@@ -10,14 +10,22 @@ from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from schema.bank_renc_schema import BankStatement, LedgerFormat
 
+# Matches below this score are never auto-accepted; they route to audit queue.
+CONFIDENCE_THRESHOLD: float = 0.75
 
-# DEFINITIONS & PYDANTIC SCHEMAS (JSON ENFORCEMENT)
+# Pre-filter date window for many-to-one candidate selection
+CANDIDATE_DATE_WINDOW_DAYS: int = 10
+
+# Maximum ledger candidates sent to the LLM per bank entry 
+MAX_CANDIDATES: int = 12
+
+
 
 class AI1to1Match(BaseModel):
-    ledger_id: str = Field(..., description="Unique Ledger ID")
-    bank_id: int = Field(..., description="Bank Statement Row Index")
+    ledger_id:  str   = Field(..., description="Unique Ledger ID")
+    bank_id:    int   = Field(..., description="Bank Statement Row Index")
     confidence: float = Field(..., ge=0.0, le=1.0, description="0.0 to 1.0")
-    reasoning: str = Field(..., description="Concise semantic/date/amount match explanation")
+    reasoning:  str   = Field(..., description="Concise semantic/date/amount match explanation")
 
 
 class AIWindowOutput(BaseModel):
@@ -29,19 +37,18 @@ class AILedgerCandidate(BaseModel):
 
 
 class AIManyToOneMatch(BaseModel):
-    bank_id: int = Field(..., description="Single matched bank row index")
-    ledger_ids: List[AILedgerCandidate] = Field(..., description="Combination of ledger entries summing to bank amount")
-    confidence: float = Field(..., ge=0.0, le=1.0)
-    reasoning: str
+    bank_id:    int                     = Field(..., description="Single matched bank row index")
+    ledger_ids: List[AILedgerCandidate] = Field(..., description="Ledger entries summing to bank amount")
+    confidence: float                   = Field(..., ge=0.0, le=1.0)
+    reasoning:  str
 
 
 class AIManyToOneOutput(BaseModel):
     matches: List[AIManyToOneMatch]
 
 
-# PHI-3 MINI OPTIMIZATION HELPERS
 def _prepare_llm() -> ChatOllama:
-    """Initialize Phi-3-mini with temperature=0 for deterministic, reproducible outputs."""
+    """Initialize Phi-3-mini with temperature=0 for deterministic outputs."""
     return ChatOllama(
         model="phi3",
         temperature=0.0,
@@ -51,25 +58,23 @@ def _prepare_llm() -> ChatOllama:
     )
 
 
-def _safe_parse_json(llm_output: str, schema: type[BaseModel]) -> Optional[Any]:
-    """Robustly extract JSON from LLM output, handling markdown fences & trailing commas."""
-    # Accept either a raw string or a LangChain AIMessage object
+def _safe_parse_json(llm_output: Any, schema: type[BaseModel]) -> Optional[Any]:
+    """Extract and validate JSON from raw LLM output. Handles AIMessage objects,
+    markdown fences, trailing commas, and partial JSON."""
     text = llm_output.content if hasattr(llm_output, "content") else str(llm_output)
 
     parser = JsonOutputParser(pydantic_object=schema)
     try:
         parsed = parser.invoke(text)
-        # JsonOutputParser returns a plain dict; validate into the Pydantic model
         if isinstance(parsed, dict):
             return schema.model_validate(parsed)
         return parsed
     except Exception:
         cleaned = re.sub(r"```(?:json)?\s*", "", text).rstrip(".")
         cleaned = re.sub(r",(\s*[}\]])", r"\1", cleaned)
-        # Strip any trailing non-JSON text after the closing brace/bracket
-        match = re.search(r"(\{.*\}|\[.*\])", cleaned, re.DOTALL)
-        if match:
-            cleaned = match.group(0)
+        found   = re.search(r"(\{.*\}|\[.*\])", cleaned, re.DOTALL)
+        if found:
+            cleaned = found.group(0)
         try:
             data = json.loads(cleaned)
             if isinstance(data, dict):
@@ -87,170 +92,477 @@ def _make_parser(schema: type[BaseModel]):
 
 
 def _format_record_for_prompt(rec: Dict[str, Any], is_bank: bool) -> str:
-    """Condense a Pydantic/dataclass row into a concise prompt string."""
-    amt_col = "debit" if is_bank else "debit_amount"
-    amt_val = rec.get(amt_col, 0.0)
-    bal_col = "credit" if is_bank else "credit_amount"
-    bal_val = rec.get(bal_col, 0.0)
-    
+    """Condense a dataclass row into a concise, token-efficient prompt line."""
+    dr_key = "debit"     if is_bank else "debit_amount"
+    cr_key = "credit"    if is_bank else "credit_amount"
+    id_key = "row_index" if is_bank else "ledger_id"
+    dt_key = "date"      if is_bank else "transaction_date"
+    nm_key = "narration" if is_bank else "account_name"
+
     return (
-        f"- {rec.get('ledger_id' if not is_bank else 'row_index')} | "
-        f"{rec.get('transaction_date' if not is_bank else 'date')} | "
-        f"Dr:{amt_val:.2f} Cr:{bal_val:.2f} | "
-        f"NARR: {rec.get('account_name' if not is_bank else 'narration', 'N/A')}"
+        f"- {rec.get(id_key, 'N/A')} | "
+        f"{rec.get(dt_key, 'N/A')} | "
+        f"Dr:{rec.get(dr_key, 0.0):.2f} Cr:{rec.get(cr_key, 0.0):.2f} | "
+        f"NARR: {rec.get(nm_key, 'N/A')}"
     )
 
 
+def _get_gl_direction_amount(gl: LedgerFormat) -> Tuple[float, str]:
+    """
+    Return (amount, direction) for a ledger record.
+    'debit'  = money flows OUT of the books (payment made).
+    'credit' = money flows IN  to the books (receipt).
+    """
+    if gl.debit_amount and gl.debit_amount > 0:
+        return gl.debit_amount, "debit"
+    if gl.credit_amount and gl.credit_amount > 0:
+        return gl.credit_amount, "credit"
+    return 0.0, "unknown"
 
-# AI TIME-WINDOW BATCH MATCHER (1-to-1)
-def ai_batch_matcher(unreconciled: Dict[str, Any], llm: ChatOllama, _AMOUNT_TOL: int) -> Tuple[Dict[str, Any], List[LedgerFormat], List[BankStatement]]:
-    """Groups leftovers into rolling 30-day windows. Asks Phi-3 for semantic 1-to-1 matches."""
-    
-    gl_remaining = list(unreconciled["UNRECONCILED_LEDGER"])
-    bk_remaining = list(unreconciled["UNRECONCILED_BANK"])
-    ai_matches = []
-    
+
+def _get_bank_direction_amount(bank: BankStatement) -> Tuple[float, str]:
+    """
+    Return (amount, direction) for a bank record.
+    'debit'  = money OUT of the account (bank debit / withdrawal).
+    'credit' = money INTO the account   (bank credit / deposit).
+    """
+    if bank.debit and bank.debit > 0:
+        return bank.debit, "debit"
+    if bank.credit and bank.credit > 0:
+        return bank.credit, "credit"
+    return 0.0, "unknown"
+
+
+def _directions_compatible(gl_dir: str, bk_dir: str, same_side: bool = True) -> bool:
+    """
+    Cashbook / same-side (same_side=True, default):
+        GL Debit  (payment out) ↔ Bank Debit  (money out)  ✓
+        GL Credit (receipt in)  ↔ Bank Credit (money in)   ✓
+
+    Standard double-entry (same_side=False):
+        GL Debit  ↔ Bank Credit  ✓
+        GL Credit ↔ Bank Debit   ✓
+    """
+    if "unknown" in (gl_dir, bk_dir):
+        return True  # can't determine; amount check is the arbiter
+    return gl_dir == bk_dir if same_side else gl_dir != bk_dir
+
+
+def _filter_candidates_for_bank(
+    bank: BankStatement,
+    ledger_pool: List[LedgerFormat],
+    date_window: int,
+    tol: float,
+) -> List[LedgerFormat]:
+    """
+    Return ledger records that are plausible matches for a given bank entry:
+      • Date within ±date_window days of the bank transaction.
+      • Amount ≤ bank amount + tol (small enough to participate in N:1 combo).
+    Sorted by date proximity (closest first), capped at MAX_CANDIDATES.
+    """
+    bk_amt, _ = _get_bank_direction_amount(bank)
+    if not bank.date:
+        return []
+
+    try:
+        bk_dt = datetime.strptime(bank.date[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return []
+
+    scored: List[Tuple[int, LedgerFormat]] = []
+    for gl in ledger_pool:
+        if not gl.transaction_date:
+            continue
+        try:
+            gl_dt = datetime.strptime(gl.transaction_date[:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+
+        day_diff = abs((bk_dt - gl_dt).days)
+        if day_diff > date_window:
+            continue
+
+        gl_amt, _ = _get_gl_direction_amount(gl)
+        if gl_amt <= bk_amt + tol:
+            scored.append((day_diff, gl))
+
+    scored.sort(key=lambda x: x[0])
+    return [gl for _, gl in scored[:MAX_CANDIDATES]]
+
+
+# 1-to-1 Math Bouncer 
+def _passes_1to1_bouncer(
+    gl_item: LedgerFormat,
+    bk_item: BankStatement,
+    tol: float,
+    same_side: bool = True,
+) -> Tuple[bool, str]:
+    """
+    Validate an AI-suggested 1-to-1 match.
+    Returns (passed, rejection_reason).
+    """
+    gl_amt, gl_dir = _get_gl_direction_amount(gl_item)
+    bk_amt, bk_dir = _get_bank_direction_amount(bk_item)
+
+    diff = abs(gl_amt - bk_amt)
+    if diff > tol:
+        return False, (
+            f"Amount mismatch: GL={gl_amt:.2f} Bank={bk_amt:.2f} "
+            f"diff={diff:.2f} exceeds tol={tol:.2f}"
+        )
+
+    if not _directions_compatible(gl_dir, bk_dir, same_side):
+        return False, (
+            f"Direction mismatch: GL is {gl_dir}, Bank is {bk_dir} "
+            f"(same_side={same_side})"
+        )
+
+    return True, ""
+
+
+# Many-to-one Math Bouncer 
+def _passes_many_to_one_bouncer(
+    gl_items: List[LedgerFormat],
+    bk_item: BankStatement,
+    tol: float,
+    same_side: bool = True,
+) -> Tuple[bool, str]:
+    """
+    Validate an AI-suggested many-to-one match.
+    Returns (passed, rejection_reason).
+    """
+    if not gl_items:
+        return False, "No ledger items resolved from suggested IDs."
+
+    bk_amt, bk_dir = _get_bank_direction_amount(bk_item)
+    gl_total = 0.0
+
+    for gl in gl_items:
+        gl_amt, gl_dir = _get_gl_direction_amount(gl)
+        if not _directions_compatible(gl_dir, bk_dir, same_side):
+            return False, (
+                f"Direction mismatch on {gl.ledger_id}: "
+                f"GL is {gl_dir}, Bank is {bk_dir}"
+            )
+        gl_total += gl_amt
+
+    diff = abs(gl_total - bk_amt)
+    if diff > tol:
+        return False, (
+            f"Sum mismatch: ΣGL={gl_total:.2f} Bank={bk_amt:.2f} "
+            f"diff={diff:.2f} exceeds tol={tol:.2f}"
+        )
+
+    return True, ""
+
+
+
+# AI Time-Window Batch Matcher (1-to-1)
+def ai_batch_matcher(
+    unreconciled: Dict[str, Any],
+    llm: ChatOllama,
+    tol: float,
+    same_side: bool = True,
+) -> Tuple[Dict[str, Any], List[LedgerFormat], List[BankStatement]]:
+    """
+    Groups residuals into rolling 30-day windows. Asks Phi-3 for 1-to-1
+    semantic matches.
+      • Confidence gate  — low-confidence → audit queue.
+      • Amount + direction bouncer.
+      • Tolerance injected into prompt.
+    """
+    gl_remaining: List[LedgerFormat]  = list(unreconciled["UNRECONCILED_LEDGER"])
+    bk_remaining: List[BankStatement] = list(unreconciled["UNRECONCILED_BANK"])
+    ai_matches:   List[dict] = []
+    audit_queue:  List[dict] = []
+
+    _empty = {
+        "AI_MATCHES":  ai_matches,
+        "AUDIT_QUEUE": audit_queue,
+        "MATCHED":     unreconciled["MATCHED"],
+    }
+
     if not gl_remaining or not bk_remaining:
-        return {
-            "AI_MATCHES": ai_matches, 
-            "MATCHED": unreconciled["MATCHED"]
-        }, gl_remaining, bk_remaining
+        return _empty, gl_remaining, bk_remaining
 
-    # Create rolling 30-day windows
-    dates = sorted([r.date for r in bk_remaining if r.date] + [r.transaction_date for r in gl_remaining if r.transaction_date])
-    if not dates: return {"AI_MATCHES": ai_matches, "MATCHED": unreconciled["MATCHED"]}, gl_remaining, bk_remaining
-    
-    window_size = timedelta(days=30)
-    current_start = datetime.strptime(dates[0][:10], "%Y-%m-%d")
-    final_end = datetime.strptime(dates[-1][:10], "%Y-%m-%d")
-    
+    dates = sorted(
+        [r.date for r in bk_remaining if r.date] +
+        [r.transaction_date for r in gl_remaining if r.transaction_date]
+    )
+    if not dates:
+        return _empty, gl_remaining, bk_remaining
+
+    window_size   = timedelta(days=30)
+    current_start = datetime.strptime(dates[0][:10],  "%Y-%m-%d")
+    final_end     = datetime.strptime(dates[-1][:10], "%Y-%m-%d")
+
+
     prompt_template = ChatPromptTemplate.from_messages([
-        ("system", """You are a financial reconciliation expert. 
-        Your task is to find 1-to-1 matches between ledger records and bank statement rows within the provided time window.
-        MATCH CRITERIA: Amounts match within ±$0.05. Dates are within the window. Narration/account names share semantic meaning (e.g., abbreviations, synonyms, reversed order).
-        OUTPUT FORMAT: Strict JSON ONLY. No markdown. No explanations outside the schema.
-        Schema: {{"matches": [{{"ledger_id": "string", "bank_id": "number", "confidence": "0-1", "reasoning": "string"}}]}}"""),
-        ("human", """TIME WINDOW: {start_date} to {end_date}\n\nLEDGER ENTRIES:\n{ledger_list}\n\nBANK ENTRIES:\n{bank_list}""")
+        ("system",
+         "You are a financial reconciliation expert.\n"
+         "Find 1-to-1 matches between ledger records and bank statement rows "
+         "within the provided time window.\n"
+         "MATCH CRITERIA:\n"
+         "  - Amounts match within ±{tol} (absolute difference).\n"
+         "  - Dates fall inside the stated time window.\n"
+         "  - Narration/account names share semantic meaning "
+         "(abbreviations, synonyms, reversed word order are acceptable).\n"
+         "CONFIDENCE: 0.0 = no evidence  |  1.0 = certain. "
+         "Only propose matches you rate ≥ {confidence_threshold}.\n"
+         "OUTPUT FORMAT: Strict JSON ONLY. No markdown. No prose outside schema.\n"
+         'Schema: {{"matches": [{{"ledger_id": "string", "bank_id": number, '
+         '"confidence": 0.0-1.0, "reasoning": "string"}}]}}'),
+        ("human",
+         "TOLERANCE: ±{tol}\n"
+         "TIME WINDOW: {start_date} to {end_date}\n\n"
+         "LEDGER ENTRIES:\n{ledger_list}\n\n"
+         "BANK ENTRIES:\n{bank_list}"),
     ])
 
-    # Process windows in chunks to respect context window & rate limits
-    while current_start < final_end:
+    while current_start <= final_end:
         window_end = current_start + window_size
-        
-        gl_chunk = [r for r in gl_remaining if r.transaction_date and current_start.date() <= datetime.strptime(r.transaction_date[:10], "%Y-%m-%d").date() <= window_end.date()]
-        bk_chunk = [r for r in bk_remaining if r.date and current_start.date() <= datetime.strptime(r.date[:10], "%Y-%m-%d").date() <= window_end.date()]
-        
-        # Limit context to ~20 records each to prevent Phi-3 degradation
+
+        gl_chunk = [
+            r for r in gl_remaining
+            if r.transaction_date
+            and current_start.date()
+            <= datetime.strptime(r.transaction_date[:10], "%Y-%m-%d").date()
+            <= window_end.date()
+        ]
+        bk_chunk = [
+            r for r in bk_remaining
+            if r.date
+            and current_start.date()
+            <= datetime.strptime(r.date[:10], "%Y-%m-%d").date()
+            <= window_end.date()
+        ]
+
         gl_ctx = [_format_record_for_prompt(asdict(r), False) for r in gl_chunk[:20]]
-        bk_ctx = [_format_record_for_prompt(asdict(r), True) for r in bk_chunk[:20]]
-        
+        bk_ctx = [_format_record_for_prompt(asdict(r), True)  for r in bk_chunk[:20]]
+
         if not gl_ctx or not bk_ctx:
             current_start += window_size
             continue
 
         chain = prompt_template | llm
-        raw = chain.invoke({
-            "start_date": current_start.strftime("%Y-%m-%d"),
-            "end_date": window_end.strftime("%Y-%m-%d"),
-            "ledger_list": "\n".join(gl_ctx),
-            "bank_list": "\n".join(bk_ctx)
+        raw   = chain.invoke({
+            "tol":                f"{tol:.2f}",
+            "confidence_threshold": str(CONFIDENCE_THRESHOLD),
+            "start_date":         current_start.strftime("%Y-%m-%d"),
+            "end_date":           window_end.strftime("%Y-%m-%d"),
+            "ledger_list":        "\n".join(gl_ctx),
+            "bank_list":          "\n".join(bk_ctx),
         })
         result = _safe_parse_json(raw, AIWindowOutput)
 
-        if result and hasattr(result, 'matches'):
+        if result and hasattr(result, "matches"):
             for m in result.matches:
-                # 1. Grab the actual raw records from your remaining pools
                 gl_item = next((r for r in gl_remaining if r.ledger_id == m.ledger_id), None)
                 bk_item = next((r for r in bk_remaining if str(r.row_index) == str(m.bank_id)), None)
 
-                if gl_item and bk_item:
-                    # Get the absolute transaction amounts
-                    gl_amt = gl_item.debit_amount if gl_item.debit_amount else gl_item.credit_amount
-                    bk_amt = bk_item.debit if bk_item.debit else bk_item.credit
+                if not gl_item or not bk_item:
+                    print(f"⚠️  GHOST REFERENCE: Ledger '{m.ledger_id}' or "
+                          f"Bank '{m.bank_id}' not found in pools — skipped.")
+                    continue
 
-                    # 2. STRICT PYTHON MATH CHECK (The Bouncer)
-                    diff = abs(gl_amt - bk_amt)
-                    if diff <= _AMOUNT_TOL:
-                        ai_matches.append(m.model_dump())
-                        # Safely remove from pools
-                        gl_remaining = [r for r in gl_remaining if r.ledger_id != m.ledger_id]
-                        bk_remaining = [r for r in bk_remaining if str(r.row_index) != str(m.bank_id)]
-                    else:
-                        print(f"⚠️ REJECTED AI HALLUCINATION: [Ledger {m.ledger_id}] and [Bank {m.bank_id}] differed by {diff:.2f} (Exceeded {_AMOUNT_TOL} limit).")
+                # confidence gate
+                if m.confidence < CONFIDENCE_THRESHOLD:
+                    audit_queue.append({
+                        **m.model_dump(),
+                        "flag":   "LOW_CONFIDENCE",
+                        "action": "Route to human audit — confidence below threshold.",
+                    })
+                    print(f"🔶 LOW CONFIDENCE ({m.confidence:.0%}): "
+                          f"[Ledger {m.ledger_id}] ↔ [Bank {m.bank_id}] → audit queue.")
+                    continue
+
+                # mount + directionality bouncer
+                passed, reason = _passes_1to1_bouncer(gl_item, bk_item, tol, same_side)
+                if not passed:
+                    print(f"⚠️  REJECTED HALLUCINATION (1-to-1): "
+                          f"[Ledger {m.ledger_id}] ↔ [Bank {m.bank_id}] — {reason}")
+                    continue
+
+                ai_matches.append(m.model_dump())
+                gl_remaining = [r for r in gl_remaining if r.ledger_id        != m.ledger_id]
+                bk_remaining = [r for r in bk_remaining if str(r.row_index)   != str(m.bank_id)]
 
         current_start += window_size
 
     return {
-        "AI_MATCHES": ai_matches,
-        "MATCHED": unreconciled["MATCHED"]
+        "AI_MATCHES":  ai_matches,
+        "AUDIT_QUEUE": audit_queue,
+        "MATCHED":     unreconciled["MATCHED"],
     }, gl_remaining, bk_remaining
 
 
-# AI ONE-TO-MANY RESIDUAL MATCHER
-def ai_residual_matcher(unreconciled_ledger: List[LedgerFormat], unreconciled_bank: List[BankStatement], llm: ChatOllama) -> Dict[str, Any]:
-    """Iterates unmatched bank entries. Finds combos of ledger entries that sum to the bank amount."""
-    
-    ai_many_matches = []
+# AI One-to-Many Residual Matcher 
+
+def ai_residual_matcher(
+    unreconciled_ledger: List[LedgerFormat],
+    unreconciled_bank:   List[BankStatement],
+    llm: ChatOllama,
+    tol: float,
+    same_side: bool = True,
+) -> Tuple[Dict[str, Any], List[LedgerFormat]]:
+    """
+    For each remaining bank entry, finds a combination of ledger entries
+    whose amounts sum to the bank amount.
+
+      • Pre-filtered candidate pool by date window + amount relevance.
+      • Sum arithmetic + directionality bouncer.
+      • Confidence gate.
+      • Tolerance injected into prompt.
+    """
+    ai_many_matches: List[dict] = []
+    audit_queue:     List[dict] = []
     final_gl_left = list(unreconciled_ledger)
-    
-    if not unreconciled_bank: return {"AI_MANY_MATCHES": ai_many_matches}, final_gl_left
+
+    if not unreconciled_bank:
+        return {"AI_MANY_MATCHES": ai_many_matches, "AUDIT_QUEUE": audit_queue}, final_gl_left
 
     prompt_template = ChatPromptTemplate.from_messages([
-        ("system", """You are a financial reconciliation expert. 
-        A single bank transaction corresponds to MULTIPLE ledger invoices/payments.
-        TASK: Identify which ledger entries sum exactly to the bank amount (±$0.05 tolerance). Use narration semantics and date proximity as clues.
-        OUTPUT FORMAT: Strict JSON ONLY. No markdown.
-        Schema: {{"matches": [{{"bank_id": "number", "ledger_ids": [{{"ledger_id": "string"}}], "confidence": "0-1", "reasoning": "string"}}]}}"""),
-        ("human", """BANK ENTRY:\n{bank_info}\n\nAVAILABLE LEDGER CANDIDATES (±5 days / closest amounts):\n{ledger_candidates}""")
+        ("system",
+         "You are a financial reconciliation expert.\n"
+         "A single bank transaction may correspond to MULTIPLE ledger entries.\n"
+         "TASK: Find which combination of the provided ledger entries sums to "
+         "the bank amount within ±{tol} tolerance.\n"
+         "Use narration semantics and date proximity as secondary signals.\n"
+         "Only propose matches you rate ≥ {confidence_threshold} confidence.\n"
+         "OUTPUT FORMAT: Strict JSON ONLY. No markdown.\n"
+         'Schema: {{"matches": [{{"bank_id": number, '
+         '"ledger_ids": [{{"ledger_id": "string"}}], '
+         '"confidence": 0.0-1.0, "reasoning": "string"}}]}}'),
+        ("human",
+         "TOLERANCE: ±{tol}\n\n"
+         "BANK ENTRY:\n{bank_info}\n\n"
+         "CANDIDATE LEDGER ENTRIES (pre-filtered ±{date_window}d, amount ≤ bank+tol):\n"
+         "{ledger_candidates}"),
     ])
 
     for bank in unreconciled_bank:
-        # Gather candidate ledgers (limit to 10-12 to fit context)
-        candidates = []
-        for gl in final_gl_left[:15]:
-            # Simple heuristic for relevance: amount proximity or date proximity
-            if bank.date and gl.transaction_date:
-                candidates.append(gl)
-        
-        if not candidates: continue
-        
+        # pre-filtered, relevance-ranked candidates only
+        candidates = _filter_candidates_for_bank(
+            bank, final_gl_left,
+            date_window=CANDIDATE_DATE_WINDOW_DAYS,
+            tol=tol,
+        )
+        if not candidates:
+            continue
+
         ctx_ledger = "\n".join([_format_record_for_prompt(asdict(g), False) for g in candidates])
-        ctx_bank = _format_record_for_prompt(asdict(bank), True)
-        
+        ctx_bank   = _format_record_for_prompt(asdict(bank), True)
+
         chain = prompt_template | llm
-        raw = chain.invoke({"bank_info": ctx_bank, "ledger_candidates": ctx_ledger})
+        raw   = chain.invoke({
+            "tol":                f"{tol:.2f}",
+            "confidence_threshold": str(CONFIDENCE_THRESHOLD),
+            "date_window":        str(CANDIDATE_DATE_WINDOW_DAYS),
+            "bank_info":          ctx_bank,
+            "ledger_candidates":  ctx_ledger,
+        })
         result = _safe_parse_json(raw, AIManyToOneOutput)
 
-        if result and hasattr(result, 'matches'):
-            for m in result.matches:
-                ai_many_matches.append(m.model_dump())
-                matched_ids = [lid.ledger_id for lid in m.ledger_ids]
-                final_gl_left = [r for r in final_gl_left if r.ledger_id not in matched_ids]
+        if not result or not hasattr(result, "matches"):
+            continue
+
+        for m in result.matches:
+            matched_ids = [lid.ledger_id for lid in m.ledger_ids]
+            gl_items    = [r for r in final_gl_left if r.ledger_id in matched_ids]
+
+            # confidence gate
+            if m.confidence < CONFIDENCE_THRESHOLD:
+                audit_queue.append({
+                    **m.model_dump(),
+                    "flag":   "LOW_CONFIDENCE",
+                    "action": "Route to human audit — confidence below threshold.",
+                })
+                print(f"🔶 LOW CONFIDENCE ({m.confidence:.0%}): "
+                      f"Many-to-one [Bank {m.bank_id}] → audit queue.")
+                continue
+
+            # sum arithmetic + directionality bouncer
+            passed, reason = _passes_many_to_one_bouncer(gl_items, bank, tol, same_side)
+            if not passed:
+                print(f"⚠️  REJECTED HALLUCINATION (many-to-1): "
+                      f"[Bank {m.bank_id}] ← {matched_ids} — {reason}")
+                continue
+
+            ai_many_matches.append(m.model_dump())
+            final_gl_left = [r for r in final_gl_left if r.ledger_id not in matched_ids]
 
     return {
-        "AI_MANY_MATCHES": ai_many_matches}, final_gl_left
+        "AI_MANY_MATCHES": ai_many_matches,
+        "AUDIT_QUEUE":     audit_queue,
+    }, final_gl_left
 
 
-# MAIN AI PIPELINE ORCHESTRATOR
-def ai_matcher_pipeline(result: dict, _AMOUNT_TOL: int) -> Dict[str, Any]:
-    """Executes the full waterfall reconciliation pipeline."""
-    llm = _prepare_llm()
-    
+
+def ai_matcher_pipeline(result: dict, _AMOUNT_TOL: float) -> Dict[str, Any]:
+    gl_input = result.get("UNRECONCILED_LEDGER", [])
+    bk_input = result.get("UNRECONCILED_BANK",   [])
+
+    try:
+        llm = _prepare_llm()
+        llm.invoke("ping")
+    except Exception as conn_err:
+        print(
+            f"\n⚠️  AI LAYER UNAVAILABLE: {conn_err}\n"
+            "   Skipping Phase 3 (AI matching). All remaining records are "
+            "returned as UNRECONCILED for manual review.\n"
+        )
+        return {
+            "FINAL_RESULT": {
+                "AI_MATCHES":             [],
+                "AI_MANY_MATCHES":        [],
+                "AUDIT_QUEUE":            [],
+                "FINAL_RESIDUALS_LEDGER": gl_input,
+                "FINAL_RESIDUALS_BANK":   bk_input,
+                "MATCHED":                result.get("MATCHED", []),
+                "ai_skipped":             True,
+                "ai_skip_reason":         str(conn_err),
+            }
+        }
+
     print("🤖 AI Time-Window Batch Matcher (1-to-1 Semantic)...")
-    ai_batch_matcher_res, gl_rem, bk_rem = ai_batch_matcher(result, llm, _AMOUNT_TOL)
-    
+    try:
+        batch_res, gl_rem, bk_rem = ai_batch_matcher(result, llm, tol=_AMOUNT_TOL)
+    except Exception as e:
+        print(f"⚠️  AI Batch Matcher crashed: {e}. Falling through to residual matcher.")
+        batch_res = {"AI_MATCHES": [], "AUDIT_QUEUE": [], "MATCHED": result.get("MATCHED", [])}
+        gl_rem, bk_rem = gl_input, bk_input
+
     if not bk_rem:
         print("✅ All remaining records reconciled via AI Batch.")
-        return {"FINAL_RESULT": {**ai_batch_matcher_res, "FINAL_RESIDUALS_LEDGER": gl_rem, "FINAL_RESIDUALS_BANK": []}}
+        return {
+            "FINAL_RESULT": {
+                **batch_res,
+                "AI_MANY_MATCHES":        [],
+                "FINAL_RESIDUALS_LEDGER": gl_rem,
+                "FINAL_RESIDUALS_BANK":   [],
+            }
+        }
 
     print("🔍 AI One-to-Many Residual Matcher...")
-    ai_residual_matcher_res, final_gl_left = ai_residual_matcher(gl_rem, bk_rem, llm)
-    
+    try:
+        residual_res, final_gl_left = ai_residual_matcher(gl_rem, bk_rem, llm, tol=_AMOUNT_TOL)
+    except Exception as e:
+        print(f"⚠️  AI Residual Matcher crashed: {e}. Returning pools as unreconciled.")
+        residual_res  = {"AI_MANY_MATCHES": [], "AUDIT_QUEUE": []}
+        final_gl_left = gl_rem
+
+    combined_audit = (
+        batch_res.get("AUDIT_QUEUE", []) +
+        residual_res.get("AUDIT_QUEUE", [])
+    )
+
     return {
         "FINAL_RESULT": {
-            **ai_batch_matcher_res,
-            **ai_residual_matcher_res,
+            "AI_MATCHES":             batch_res.get("AI_MATCHES", []),
+            "AI_MANY_MATCHES":        residual_res.get("AI_MANY_MATCHES", []),
+            "AUDIT_QUEUE":            combined_audit,
+            "MATCHED":                batch_res.get("MATCHED", []),
             "FINAL_RESIDUALS_LEDGER": final_gl_left,
-            "FINAL_RESIDUALS_BANK": bk_rem,
+            "FINAL_RESIDUALS_BANK":   bk_rem,
         }
     }

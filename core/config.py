@@ -1,3 +1,4 @@
+import os
 import logging
 
 from typing import Optional
@@ -5,7 +6,9 @@ from typing import Optional
 from sqlalchemy import create_engine 
 from sqlalchemy_utils import database_exists, create_database
 from pydantic_settings import BaseSettings, SettingsConfigDict # type: ignore
+from dotenv import load_dotenv
 
+load_dotenv()
 
 class Settings(BaseSettings):
 
@@ -28,6 +31,10 @@ class Settings(BaseSettings):
 
     LOG_FILE: str = "debug.log"
     LOG_FORMAT: str = "%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s"
+
+    JWT_SECRET_KEY: str = os.environ.get("JWT_SECRET_KEY")
+    SECRET_KEY: str = os.environ.get('SECRET_KEY')
+    SCHEDULER_API_ENABLED: bool = True
 
     def model_post_init(self, __context):
         if self.DATABASE_URL.startswith("postgres"):
@@ -74,4 +81,4 @@ def ensure_database_exists(sync_uri: str) -> None:
     except Exception as e:
         logging.error(f"Failed to check or create database: {e}")
 
-ensure_database_exists(settings.SQLALCHEMY_SYNC_DATABASE_URI)
+# ensure_database_exists(settings.SQLALCHEMY_SYNC_DATABASE_URI)

@@ -50,7 +50,7 @@ class BankStatement:
         )
 
 
-class LedgerSource(Enum):
+class LedgerSource(str, Enum):
     """
     Discriminates between the two paths that produce a LedgerFormat record.
 
@@ -154,7 +154,7 @@ class LedgerFormat:
         )
 
         # Convenience default: for MANUAL records vendor_name == account_name
-        if self.vendor_name is None and self.source == LedgerSource.MANUAL:
+        if self.vendor_name is None and self.source == LedgerSource.MANUAL.value:
             self.vendor_name = self.account_name
 
     @property
@@ -169,16 +169,16 @@ class LedgerFormat:
 
     @property
     def is_auto(self) -> bool:
-        return self.source == LedgerSource.AUTO
+        return self.source == LedgerSource.AUTO.value
 
     @property
     def is_manual(self) -> bool:
-        return self.source == LedgerSource.MANUAL
+        return self.source == LedgerSource.MANUAL.value
 
     def to_dict(self) -> dict:
         return {
             "ledger_id":            self.ledger_id,
-            "source":               self.source.value,
+            "source":               self.source,
             "account_name":         self.account_name,
             "account_number":       self.account_number,
             "transaction_date":     self.transaction_date,

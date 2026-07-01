@@ -19,3 +19,5 @@ old/
 
 *.safetensors
 *.model
+
+*.db

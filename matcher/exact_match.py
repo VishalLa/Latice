@@ -2,17 +2,18 @@ from __future__ import annotations
 
 from typing import List
 from schema import BankStatement, LedgerFormat
+from .fuzzy_match import extract_utr
 
-_AMOUNT_TOL = 0.05
+_DEFAULT_AMOUNT_TOL = 0.05
 
-def _amounts_equal(a: float, b: float) -> bool:
-    return abs(a - b) <= _AMOUNT_TOL
-
+def _amounts_equal(a: float, b: float, tol: float) -> bool:
+    return abs(a - b) <= tol
 
 def exact_matcher(
     gl_records: List[LedgerFormat], 
     bank_records: List[BankStatement],
-    same_sid: bool = True   # True = cashbook, False = standard GL
+    same_side: bool = True,        # True = cashbook, False = standard GL
+    amount_tol: float = _DEFAULT_AMOUNT_TOL,  # driven by TOLERANCES["EXACT"]
 ) -> dict: 
     
     print("Exact Match")
@@ -43,18 +44,18 @@ def exact_matcher(
                 amount_ok = False
                 matched_amount = 0.0
 
-                if same_sid:
-                    if gl_debit > 0 and _amounts_equal(gl_debit, bank.debit):
+                if same_side:
+                    if gl_debit > 0 and _amounts_equal(gl_debit, bank.debit, amount_tol):
                         amount_ok = True 
                         matched_amount = gl_debit
-                    elif gl_credit > 0 and _amounts_equal(gl_credit, bank.credit):
+                    elif gl_credit > 0 and _amounts_equal(gl_credit, bank.credit, amount_tol):
                         amount_ok = True
                         matched_amount = gl_credit
                 else: 
-                    if gl_debit > 0 and _amounts_equal(gl_debit, bank.credit):
+                    if gl_debit > 0 and _amounts_equal(gl_debit, bank.credit, amount_tol):
                         amount_ok = True
                         matched_amount = gl_debit
-                    elif gl_credit > 0 and _amounts_equal(gl_credit, bank.debit):
+                    elif gl_credit > 0 and _amounts_equal(gl_credit, bank.debit, amount_tol):
                         amount_ok = True
                         matched_amount = gl_credit
 
@@ -72,19 +73,37 @@ def exact_matcher(
                 else:
                     ref_matched = False
 
+                # utr_matched = False
+                # if not ref_matched:
+                #     utr_gl = extract_utr(gl.reference_id) or extract_utr(gl.account_name)
+                #     utr_bank = extract_utr(bank.txn_id) or extract_utr(bank.narration)
+                #     if utr_gl and utr_bank and utr_gl == utr_bank:
+                #         utr_matched = True
+                
+                # if require_ref_confirmation and not (ref_matched or utr_matched):
+                #     continue
+
                 if require_ref_confirmation and not ref_matched:
                     continue
 
                 ledger_used[gi] = True
                 bank_used[bi] = True
+                # if ref_matched:
+                #     confirmation_method = "reference_id"
+                # elif utr_matched:
+                #     confirmation_method = "narration_utr"
+                # else:
+                #     confirmation_method = "amount_date_only"
                 exact_matches.append({
                     "ledger_id": gl.ledger_id,
                     "bank_id": bank.row_index,
                     "amount": matched_amount,
                     "date": gl.transaction_date,
-                    "reference_matched": ref_matched,
+                    "reference_matched": ref_matched
+                    # "reference_matched": ref_matched or utr_matched,
+                    # "confirmation_method": confirmation_method,
                 })
-                break # this ledger row is spoken for; move to the next one
+                break
 
     # Pass 1: Prefer matches confirmed by a matching reference/cheque number
     attempt(require_ref_confirmation=True)

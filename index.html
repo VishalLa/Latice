@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Reconciliation API</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 30px; max-width: 600px; margin: auto; }
+        .form-box { background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #dee2e6; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: bold; margin-bottom: 8px; color: #333; }
+        input[type="file"] { border: 1px solid #ced4da; padding: 10px; width: 100%; box-sizing: border-box; background: white; border-radius: 4px; }
+        button { padding: 12px 20px; background-color: #0d6efd; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; }
+        button:hover { background-color: #0b5ed7; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        #resultBox { margin-top: 20px; padding: 15px; background: #212529; color: #20c997; border-radius: 6px; white-space: pre-wrap; font-family: monospace; display: none; overflow-x: auto; }
+    </style>
+</head>
+<body>
+
+    <h2>API Upload Tester</h2>
+    
+    <div class="form-box">
+        <form id="uploadForm">
+            <div class="form-group">
+                <label for="ledgerFile">1. Ledger File (CSV or XLSX)</label>
+                <input type="file" id="ledgerFile" accept=".csv, .xlsx" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="bankFile">2. Bank Statement (CSV or XLSX)</label>
+                <input type="file" id="bankFile" accept=".csv, .xlsx" required>
+            </div>
+            
+            <button type="submit" id="submitBtn">Send to Flask Pipeline</button>
+        </form>
+    </div>
+
+    <div id="resultBox"></div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault(); // Stop page refresh
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const resultBox = document.getElementById('resultBox');
+            
+            // Set UI to loading state
+            submitBtn.disabled = true;
+            submitBtn.innerText = "Uploading & Processing... (Check Flask Terminal)";
+            resultBox.style.display = "block";
+            resultBox.style.color = "#ffc107";
+            resultBox.innerText = "Sending request to http://localhost:8000/api/run_reconciliation ...";
+
+            // Package the files exactly how Flask expects them
+            const formData = new FormData();
+            const ledgerFile = document.getElementById('ledgerFile').files[0];
+            const bankFile = document.getElementById('bankFile').files[0];
+
+            formData.append('ledger_file', ledgerFile);
+            formData.append('bank_file', bankFile);
+
+            try {
+                const response = await fetch('http://localhost:8000/api/run_reconciliation', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultBox.style.color = "#20c997"; // Green for success
+                    resultBox.innerHTML = `STATUS: ${response.status} OK\n\n` + JSON.stringify(data, null, 2);
+                } else {
+                    resultBox.style.color = "#dc3545"; // Red for error
+                    resultBox.innerHTML = `STATUS: ${response.status} ERROR\n\n` + JSON.stringify(data, null, 2);
+                }
+            } catch (error) {
+                resultBox.style.color = "#dc3545";
+                resultBox.innerHTML = `NETWORK ERROR: ${error.message}\n\n1. Is Flask definitely running on port 8000?\n2. Did you enable CORS in your Flask app?`;
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerText = "Send to Flask Pipeline";
+            }
+        });
+    </script>
+</body>
+</html>

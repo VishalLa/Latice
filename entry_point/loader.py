@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from schema import LedgerFormat, LedgerSource, BankStatement, BankTemplate
-from matcher.bank_processor import detect_bank
+from .bank_processor import detect_bank
 
 
 _AMOUNT_CLEAN_RE = re.compile(r"[^\d.\-]")
@@ -308,10 +308,10 @@ def _read_excel_as_rows(
 
 
 # ---------------------------------------------------------------------------
-# load_ledger_csv  (CSV + XLSX)
+# load_ledger  (CSV + XLSX)
 # ---------------------------------------------------------------------------
 
-def load_ledger_csv(
+def load_ledger(
     filepath: str,
     date_format: str = "%Y-%m-%d",
     encoding: str = "utf-8",

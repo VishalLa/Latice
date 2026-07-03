@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --page-bg: theme('colors.mist.50');
+  --surface: #ffffff;
+  --surface-alt: theme('colors.mist.100');
+  --text-primary: theme('colors.ink.900');
+  --text-muted: #667085;
+  --accent: theme('colors.mist.accent');
+  --border: #E4EAF1;
+}
+
+.dark {
+  --page-bg: theme('colors.ink.900');
+  --surface: theme('colors.ink.800');
+  --surface-alt: theme('colors.ink.700');
+  --text-primary: #F5F7FF;
+  --text-muted: theme('colors.ink.muted');
+  --accent: theme('colors.brand.cyan');
+  --border: rgba(255,255,255,0.08);
+}
+
+html, body, #app {
+  height: 100%;
+}
+
+body {
+  background-color: var(--page-bg);
+  color: var(--text-primary);
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Visible keyboard focus, always */
+:focus-visible {
+  outline: 2px solid theme('colors.brand.glow');
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+::selection {
+  background: theme('colors.brand.purple');
+  color: white;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: theme('colors.brand.blue');
+  border-radius: 999px;
+}

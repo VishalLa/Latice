@@ -146,7 +146,7 @@ class ReconciliationRunModel(Base):
     __tablename__ = "reconciliation_run"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    template_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bank_template.id"))
+    template_id: Mapped[Optional[int]] = mapped_column(Integer)
 
     ledger_source: Mapped[Optional[str]] = mapped_column(String(16))
     bank_name: Mapped[Optional[str]] = mapped_column(String(128))
@@ -164,6 +164,7 @@ class ReconciliationRunModel(Base):
 
     run_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user.id"))
+    user: Mapped[Optional["User"]] = relationship(back_populates="reconciliation_runs")
 
     # Relationships
     match_results: Mapped[List["MatchResultModel"]] = relationship(back_populates="run", cascade="all, delete-orphan")

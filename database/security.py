@@ -1,26 +1,19 @@
 import os
-import random
-import hashlib 
 from passlib.context import CryptContext
 
 from itsdangerous import URLSafeTimedSerializer
 from flask import current_app
 
 pwd_context = CryptContext(
-    schemes=["bcrypt"],
+    schemes=["bcrypt_sha256"],
     deprecated="auto"
 )
 
-def _hash_per_bcrypt(password: str) -> str: 
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-def hash_password(password: str) -> str: 
-    safe_password = _hash_per_bcrypt(password)
-    return pwd_context.hash(safe_password)
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    safe_password = _hash_per_bcrypt(plain_password)
-    return pwd_context.verify(safe_password, hashed_password)
+    return pwd_context.verify(plain_password, hashed_password)
 
 
 def generate_verification_token(email: str) -> str: 

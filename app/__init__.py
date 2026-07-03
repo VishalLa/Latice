@@ -23,6 +23,8 @@ LOG_FILE = settings.LOG_FILE
 
 def init_db():
     ensure_database_exists(settings.SQLALCHEMY_SYNC_DATABASE_URI)
+    from database.session import create_tables
+    create_tables()
 
 
 def run_ollama():

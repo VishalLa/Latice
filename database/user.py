@@ -7,7 +7,7 @@ from sqlalchemy import DateTime, String, Column
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, _uuid
-from .bank_renc_model import BankStatementModel, LedgerFormatModel, ReconciliationRunModel
+from .bank_renc_model import ReconciliationRunModel
 from .security import hash_password, verify_password
 
 
@@ -23,8 +23,6 @@ class User(Base):
 
     # Relationships
     reconciliation_runs: Mapped[List["ReconciliationRunModel"]] = relationship(back_populates="user")
-    bank_statements: Mapped[List["BankStatementModel"]] = relationship(back_populates="user")
-    ledger_records: Mapped[List["LedgerFormatModel"]] = relationship(back_populates="user")
 
     def __repr__(self) -> str:
         return f"<User {self.username!r} email={self.email!r}>"

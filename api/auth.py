@@ -28,7 +28,7 @@ def register_user():
         session.add(user)
         session.commit()
 
-    return jsonify({"message": "User registered successfully", "username": user.username}), 201
+        return jsonify({"message": "User registered successfully", "username": user.username}), 201
 
 
 @app.route('/login', methods=['POST'])

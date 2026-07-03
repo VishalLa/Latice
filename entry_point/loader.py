@@ -78,11 +78,45 @@ def parse_date(value: Any, date_format: str) -> Tuple[Optional[str], Optional[st
     s = str(value).strip()
     if s == "" or s.lower() == "nan":
         return None, "empty date"
+    # First, try the provided explicit format (template-driven)
     try:
         dt = datetime.strptime(s, date_format)
         return dt.date().isoformat(), None
-    except ValueError as e:
-        return None, f"date '{s}' did not match format '{date_format}': {e}"
+    except Exception:
+        pass
+
+    # Fallback: try pandas to parse common/ambiguous formats (infer dayfirst too)
+    try:
+        # Try with default parsing (pandas may vary by version)
+        pdt = pd.to_datetime(s, errors="coerce")
+        if pdt is pd.NaT or pdt is None:
+            # Try with dayfirst=True to handle D/M/Y formats
+            pdt = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        if pdt is not pd.NaT and pdt is not None:
+            return pdt.date().isoformat(), None
+    except Exception:
+        pass
+
+    # Try a set of common explicit formats (day-first and month names)
+    COMMON_FALLBACKS = [
+        "%Y-%m-%d",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%d-%b-%Y",
+        "%d %b %Y",
+        "%b %d, %Y",
+        "%Y/%m/%d",
+    ]
+    for fm in COMMON_FALLBACKS:
+        try:
+            dt = datetime.strptime(s, fm)
+            return dt.date().isoformat(), None
+        except Exception:
+            continue
+
+    # Last resort: mention the formats we tried in the warning.
+    tried = [date_format, "pandas(auto, dayfirst=False)", "pandas(auto, dayfirst=True)"] + COMMON_FALLBACKS
+    return None, f"date '{s}' did not match/parse any known formats (tried: {tried})"
 
 
 def _file_extension(filepath: str) -> str:

@@ -12,6 +12,7 @@ from .celery import app as celery_app
 from core.config import settings, ensure_database_exists
 
 from api import bank_rec_api
+from api import auth
 
 from dotenv import load_dotenv
 
@@ -45,12 +46,13 @@ def create_app():
     app.config['SECRET_KEY'] = settings.SECRET_KEY
 
     app.register_blueprint(bank_rec_api.app, url_prefix="/api")
+    app.register_blueprint(auth.app, url_prefix="/auth")
 
     app.config["JWT_SECRET_KEY"] = settings.JWT_SECRET_KEY
     _ = JWTManager(app)
 
     with app.app_context():
-            init_db()
+        init_db()
             
     return app
 

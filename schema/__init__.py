@@ -24,7 +24,8 @@ from .bank_renc_schema import (
     LedgerFormat,
     LedgerSource,
     IgnoredMetadataRecord,
-    AuditInvestigationItem
+    AuditInvestigationItem,
+    ReconciliationRun
 )
 
 from .tds_schema import (
@@ -67,6 +68,7 @@ __all__ = [
     "LedgerFormat",
     "IgnoredMetadataRecord",
     "AuditInvestigationItem",
+    "ReconciliationRun",
 
     # TDS
     "DeducteeType",

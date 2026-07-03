@@ -1,8 +1,26 @@
 from __future__ import annotations 
 
-from typing import List
+from typing import List, Optional
 from schema import BankStatement, LedgerFormat
 from .fuzzy_match import extract_utr
+
+
+def _get_iso_date_str(rec: object, is_bank: bool = False) -> Optional[str]:
+    """Return an ISO-like date string (YYYY-MM-DD) from record, trying
+    primary then raw fields. Returns None if no usable date found."""
+    if is_bank:
+        for attr in ("date", "date_raw"):
+            val = getattr(rec, attr, None)
+            if val not in (None, ""):
+                s = str(val).strip()
+                return s[:10]
+    else:
+        for attr in ("transaction_date", "transaction_date_raw"):
+            val = getattr(rec, attr, None)
+            if val not in (None, ""):
+                s = str(val).strip()
+                return s[:10]
+    return None
 
 _DEFAULT_AMOUNT_TOL = 0.05
 
@@ -26,7 +44,8 @@ def exact_matcher(
         for gi, gl in enumerate(gl_records):
             if ledger_used[gi]:
                 continue
-            if not gl.transaction_date:
+            gld = _get_iso_date_str(gl, is_bank=False)
+            if not gld:
                 continue
 
             gl_debit = gl.debit_amount
@@ -35,10 +54,11 @@ def exact_matcher(
             for bi, bank in enumerate(bank_records):
                 if bank_used[bi]:
                     continue
-                if not bank.date:
+                bd = _get_iso_date_str(bank, is_bank=True)
+                if not bd:
                     continue
-                
-                if bank.date != gl.transaction_date:
+
+                if bd != gld:
                     continue
 
                 amount_ok = False
@@ -98,7 +118,7 @@ def exact_matcher(
                     "ledger_id": gl.ledger_id,
                     "bank_id": bank.row_index,
                     "amount": matched_amount,
-                    "date": gl.transaction_date,
+                    "date": gld,
                     "reference_matched": ref_matched
                     # "reference_matched": ref_matched or utr_matched,
                     # "confirmation_method": confirmation_method,

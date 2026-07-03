@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -52,6 +53,7 @@ class LedgerFormatModel(Base):
     reference_id: Mapped[Optional[str]] = mapped_column(String(128))
 
     parse_warnings: Mapped[List[str]] = mapped_column(JSON, nullable=False, default=list)
+    run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("reconciliation_run.id"))
 
     source: Mapped[LedgerSource] = mapped_column(
         SAEnum(LedgerSource, values_callable=lambda e: [m.value for m in e]),
@@ -64,6 +66,8 @@ class LedgerFormatModel(Base):
     vendor_name: Mapped[Optional[str]] = mapped_column(String(255))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    run: Mapped[Optional["ReconciliationRunModel"]] = relationship(back_populates="ledger_records")
+    match_results: Mapped[List["MatchResultModel"]] = relationship(back_populates="ledger_format")
 
     # ── convenience properties mirroring the dataclass's is_credit/is_debit ──
     @property
@@ -131,6 +135,65 @@ class BankStatementModel(Base):
     parse_warnings: Mapped[List[str]] = mapped_column(JSON, nullable=False, default=list)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    run: Mapped[Optional["ReconciliationRunModel"]] = relationship(back_populates="bank_statements")
+    match_results: Mapped[List["MatchResultModel"]] = relationship(back_populates="bank_statement")
+    run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("reconciliation_run.id"))
+
+
+class ReconciliationRunModel(Base):
+    """One complete run of the reconciliation pipeline and its summary counters."""
+
+    __tablename__ = "reconciliation_run"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    template_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bank_template.id"))
+
+    ledger_source: Mapped[Optional[str]] = mapped_column(String(16))
+    bank_name: Mapped[Optional[str]] = mapped_column(String(128))
+    template_version: Mapped[Optional[str]] = mapped_column(String(32))
+    bank_csv_path: Mapped[Optional[str]] = mapped_column(String(512))
+    ledger_csv_path: Mapped[Optional[str]] = mapped_column(String(512))
+
+    ledger_records: Mapped[int] = mapped_column(Integer, default=0)
+    bank_records: Mapped[int] = mapped_column(Integer, default=0)
+    exact_matches: Mapped[int] = mapped_column(Integer, default=0)
+    fuzzy_matches: Mapped[int] = mapped_column(Integer, default=0)
+    ai_matches: Mapped[int] = mapped_column(Integer, default=0)
+    unreconciled_ledger: Mapped[int] = mapped_column(Integer, default=0)
+    unreconciled_bank: Mapped[int] = mapped_column(Integer, default=0)
+
+    run_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user.id"))
+
+    # Relationships
+    match_results: Mapped[List["MatchResultModel"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    bank_statements: Mapped[List["BankStatementModel"]] = relationship(back_populates="run")
+    ledger_records: Mapped[List["LedgerFormatModel"]] = relationship(back_populates="run")
+
+
+class MatchResultModel(Base):
+    """One matched pair (or unmatched item) produced by a ReconciliationRun."""
+
+    __tablename__ = "match_result"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("reconciliation_run.id"), nullable=False)
+    ledger_format_id: Mapped[Optional[int]] = mapped_column(ForeignKey("ledger_format.id"))
+    bank_statement_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bank_statement.id"))
+
+    match_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    adjustment_type: Mapped[Optional[str]] = mapped_column(String(128))
+    confidence_score: Mapped[Optional[str]] = mapped_column(String(32))
+    matched_amount: Mapped[Optional[float]] = mapped_column(Float)
+    matched_date: Mapped[Optional[date_]] = mapped_column(Date)
+    details: Mapped[Optional[str]] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # Relationships
+    run: Mapped["ReconciliationRunModel"] = relationship(back_populates="match_results")
+    ledger_format: Mapped[Optional["LedgerFormatModel"]] = relationship(back_populates="match_results")
+    bank_statement: Mapped[Optional["BankStatementModel"]] = relationship(back_populates="match_results")
 
 
 class IgnoredMetadataRecordModel(Base):

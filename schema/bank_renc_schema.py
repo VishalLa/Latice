@@ -41,6 +41,7 @@ class BankStatement:
     balance:          Optional[float] = None
     txn_id:           Optional[str]   = None
     parse_warnings:   List[str]       = field(default_factory=list)
+    run_id:           Optional[str]   = None
 
     def __post_init__(self) -> None:
         self.debit  = float(self.debit)  if self.debit  not in (None, "") else 0.0
@@ -113,6 +114,7 @@ class LedgerFormat:
     credit_amount:        float          = 0.0     # Receipt in / income
     reference_id:         Optional[str]  = None    # Invoice / cheque / ref no.
     parse_warnings:       List[str]      = field(default_factory=list)
+    run_id:               Optional[str]  = None
 
     # ── Path discriminator & metadata ────────────────────────────────────────
     source:               LedgerSource   = LedgerSource.MANUAL
@@ -213,4 +215,92 @@ class AuditInvestigationItem:
     action_required: str = (
         "Bank Reversal detected; requires manual General Ledger journal entry."
     )
+
+
+@dataclass
+class ReconciliationRun:
+    """Summary object describing one pipeline run and its results.
+
+    This mirrors the database `ReconciliationRun` model and is used when
+    serializing/deserializing run metadata between tasks, APIs and report
+    writers.
+    """
+    id:                 Optional[str] = None
+    template_id:        Optional[str] = None
+
+    ledger_source:      Optional[str] = None  # "auto" | "manual"
+    bank_name:          Optional[str] = None
+    template_version:   Optional[str] = None
+    bank_csv_path:      Optional[str] = None
+    ledger_csv_path:    Optional[str] = None
+
+    ledger_records:     int = 0
+    bank_records:       int = 0
+    exact_matches:      int = 0
+    fuzzy_matches:      int = 0
+    ai_matches:         int = 0
+    unreconciled_ledger:int = 0
+    unreconciled_bank:  int = 0
+
+    run_at:             Optional[str] = None  # ISO datetime string
+    user_id:            Optional[str] = None
+
+    # Rich payloads consumed by report writers / API
+    match_results:      List[dict] = field(default_factory=list)
+    ledger:             List[LedgerFormat] = field(default_factory=list)
+    bank:               List[BankStatement] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "template_id": self.template_id,
+            "ledger_source": self.ledger_source,
+            "bank_name": self.bank_name,
+            "template_version": self.template_version,
+            "ledger_records": self.ledger_records,
+            "bank_records": self.bank_records,
+            "exact_matches": self.exact_matches,
+            "fuzzy_matches": self.fuzzy_matches,
+            "ai_matches": self.ai_matches,
+            "unreconciled_ledger": self.unreconciled_ledger,
+            "unreconciled_bank": self.unreconciled_bank,
+            "run_at": self.run_at,
+            "user_id": self.user_id,
+            "match_results": self.match_results,
+            "ledger": [l.to_dict() for l in self.ledger],
+            "bank": [b.__dict__ for b in self.bank],
+        }
+
+
+@dataclass
+class MatchResult:
+    """Lightweight representation of a match produced by the pipeline.
+
+    Mirrors the database `MatchResult` and is used when transferring results
+    between processes or serializing to JSON for the frontend.
+    """
+    id:                 Optional[str] = None
+    run_id:             Optional[str] = None
+    ledger_record_id:   Optional[str] = None
+    bank_stmt_id:       Optional[str] = None
+    match_type:         str = ""
+    adjustment_type:    Optional[str] = None
+    confidence_score:   Optional[str] = None
+    matched_amount:     Optional[float] = None
+    matched_date:       Optional[str] = None
+    details:            Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "ledger_record_id": self.ledger_record_id,
+            "bank_stmt_id": self.bank_stmt_id,
+            "match_type": self.match_type,
+            "adjustment_type": self.adjustment_type,
+            "confidence_score": self.confidence_score,
+            "matched_amount": self.matched_amount,
+            "matched_date": self.matched_date,
+            "details": self.details,
+        }
 

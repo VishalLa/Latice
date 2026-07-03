@@ -176,6 +176,12 @@ class MatchResultModel(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("reconciliation_run.id"), nullable=False)
+
+    # 1. ORM Foreign Keys (Required for SQL joins and relationships)
+    ledger_format_id: Mapped[Optional[int]] = mapped_column(ForeignKey("ledger_format.id"))
+    bank_statement_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bank_statement.id"))
+
+    # 2. String Business Keys (Required to accept the Celery matcher payload)
     ledger_id: Mapped[Optional[str]] = mapped_column(String(32))
     bank_id: Mapped[Optional[str]] = mapped_column(String(32))
 
@@ -188,12 +194,19 @@ class MatchResultModel(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    # Relationships
+    # 3. Relationships (Explicitly bound to the integer foreign keys)
     run: Mapped["ReconciliationRunModel"] = relationship(back_populates="match_results")
-    ledger_format: Mapped[Optional["LedgerFormatModel"]] = relationship(back_populates="match_results")
-    bank_statement: Mapped[Optional["BankStatementModel"]] = relationship(back_populates="match_results")
+    
+    ledger_format: Mapped[Optional["LedgerFormatModel"]] = relationship(
+        back_populates="match_results",
+        foreign_keys=[ledger_format_id]
+    )
+    bank_statement: Mapped[Optional["BankStatementModel"]] = relationship(
+        back_populates="match_results",
+        foreign_keys=[bank_statement_id]
+    )
 
-
+ 
 class IgnoredMetadataRecordModel(Base):
     """A zero-amount record silently dropped before matching begins."""
 

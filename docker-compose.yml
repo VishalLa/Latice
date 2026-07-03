@@ -45,6 +45,23 @@ services:
     networks:
       - backend_network
 
+  worker:
+    build: .
+    container_name: bank_rec_worker
+    command: celery -A app.celery worker --loglevel=info
+    environment:
+      REDIS_URL: redis://redis_server:6379/0
+      DATABASE_URL: postgresql://postgres:postgres@postgres_db:5432/bank_reconciliation
+      POSTGRES_HOST: postgres_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bank_reconciliation
+    depends_on:
+      - postgres_db
+      - redis_server
+    networks:
+      - backend_network
+
 volumes:
   postgres_data:
 

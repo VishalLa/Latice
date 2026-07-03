@@ -8,7 +8,7 @@ from database.bank_renc_model import (
     BankStatementModel,
     IgnoredMetadataRecordModel,
     AuditInvestigationItemModel,
-    MatchPatternModel
+    MatchResultModel,
 )
 
 class PushEntryPointData:
@@ -90,7 +90,7 @@ class PushEntryPointData:
         Pushes successfully matched records to the database.
         """
         try:
-            db_matches = [MatchPatternModel(**data) for data in matches_data]
+            db_matches = [MatchResultModel(**data) for data in matches_data]
             session.add_all(db_matches)
             session.commit()
             return True
@@ -145,7 +145,7 @@ class PushEntryPointData:
         """
         try:
             # 1. Prepare Matches
-            db_matches = [MatchPatternModel(**data) for data in matches_data]
+            db_matches = [MatchResultModel(**data) for data in matches_data]
             
             # 2. Prepare Ignored Records
             db_ignored = [IgnoredMetadataRecordModel(**data) for data in ignored_data]

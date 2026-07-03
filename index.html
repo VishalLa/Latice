@@ -50,7 +50,7 @@
             submitBtn.innerText = "Uploading & Processing... (Check Flask Terminal)";
             resultBox.style.display = "block";
             resultBox.style.color = "#ffc107";
-            resultBox.innerText = "Sending request to http://localhost:8000/api/run_reconciliation ...";
+            resultBox.innerText = "Sending request to http://100.67.162.85:8000/api/run_reconciliation ...";
 
             // Package the files exactly how Flask expects them
             const formData = new FormData();
@@ -61,7 +61,7 @@
             formData.append('bank_file', bankFile);
 
             try {
-                const response = await fetch('http://localhost:8000/api/run_reconciliation', {
+                const response = await fetch('http://100.67.162.85:8000/api/run_reconciliation', {
                     method: 'POST',
                     body: formData
                 });

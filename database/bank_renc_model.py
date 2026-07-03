@@ -36,9 +36,6 @@ class LedgerFormatModel(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-
-    # Business key used by the matchers (e.g. "L0001"); unique but not the PK
-    # so re-imports / re-runs don't collide with autoincrement.
     ledger_id: Mapped[str] = mapped_column(String(32), nullable=False)
 
     account_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -179,8 +176,8 @@ class MatchResultModel(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("reconciliation_run.id"), nullable=False)
-    ledger_format_id: Mapped[Optional[int]] = mapped_column(ForeignKey("ledger_format.id"))
-    bank_statement_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bank_statement.id"))
+    ledger_id: Mapped[Optional[str]] = mapped_column(String(32))
+    bank_id: Mapped[Optional[str]] = mapped_column(String(32))
 
     match_type: Mapped[str] = mapped_column(String(32), nullable=False)
     adjustment_type: Mapped[Optional[str]] = mapped_column(String(128))

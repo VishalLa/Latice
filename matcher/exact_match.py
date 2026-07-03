@@ -93,35 +93,35 @@ def exact_matcher(
                 else:
                     ref_matched = False
 
-                # utr_matched = False
-                # if not ref_matched:
-                #     utr_gl = extract_utr(gl.reference_id) or extract_utr(gl.account_name)
-                #     utr_bank = extract_utr(bank.txn_id) or extract_utr(bank.narration)
-                #     if utr_gl and utr_bank and utr_gl == utr_bank:
-                #         utr_matched = True
+                utr_matched = False
+                if not ref_matched:
+                    utr_gl = extract_utr(gl.reference_id) or extract_utr(gl.account_name)
+                    utr_bank = extract_utr(bank.txn_id) or extract_utr(bank.narration)
+                    if utr_gl and utr_bank and utr_gl == utr_bank:
+                        utr_matched = True
                 
-                # if require_ref_confirmation and not (ref_matched or utr_matched):
-                #     continue
-
-                if require_ref_confirmation and not ref_matched:
+                if require_ref_confirmation and not (ref_matched or utr_matched):
                     continue
+
+                # if require_ref_confirmation and not ref_matched:
+                #     continue
 
                 ledger_used[gi] = True
                 bank_used[bi] = True
-                # if ref_matched:
-                #     confirmation_method = "reference_id"
-                # elif utr_matched:
-                #     confirmation_method = "narration_utr"
-                # else:
-                #     confirmation_method = "amount_date_only"
+                if ref_matched:
+                    confirmation_method = "reference_id"
+                elif utr_matched:
+                    confirmation_method = "narration_utr"
+                else:
+                    confirmation_method = "amount_date_only"
                 exact_matches.append({
                     "ledger_id": gl.ledger_id,
                     "bank_id": bank.row_index,
                     "amount": matched_amount,
                     "date": gld,
-                    "reference_matched": ref_matched
-                    # "reference_matched": ref_matched or utr_matched,
-                    # "confirmation_method": confirmation_method,
+                    # "reference_matched": ref_matched
+                    "reference_matched": ref_matched or utr_matched,
+                    "confirmation_method": confirmation_method,
                 })
                 break
 

@@ -147,7 +147,14 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path):
 
         all_matches = _collect_all_matches(result)
         matches_list = _serialize_for_celery(all_matches)
-        ignored_list = _serialize_for_celery(result.get("IGNORED_METADATA", []))
+        raw_ignored = result.get("IGNORED_METADATA", [])
+        for item in raw_ignored:
+            if "ledger_id" in item:
+                item["row_ref"] = item.pop("ledger_id")
+            elif "row_index" in item:
+                item["row_ref"] = str(item.pop("row_index"))
+
+        ignored_list = _serialize_for_celery(raw_ignored)
         audit_list = _serialize_for_celery(result.get("AUDIT_INVESTIGATION", []))
 
         print("\n\n" + "=" * 50)

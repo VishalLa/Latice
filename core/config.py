@@ -1,11 +1,11 @@
 import os
 import logging
-
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
-from sqlalchemy import create_engine 
+from sqlalchemy import create_engine
 from sqlalchemy_utils import database_exists, create_database
-from pydantic_settings import BaseSettings, SettingsConfigDict # type: ignore
+from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,14 +14,18 @@ class Settings(BaseSettings):
 
     DEBUG: bool = False
 
-    DATABASE_URL: str
-    
+    DATABASE_URL: Optional[str] = None
+    POSTGRES_USER: Optional[str] = None
+    POSTGRES_PASSWORD: Optional[str] = None
+    POSTGRES_HOST: Optional[str] = None
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: Optional[str] = None
+
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    
+
     SQLALCHEMY_SYNC_DATABASE_URI: Optional[str] = None
     SQLALCHEMY_ASYNC_DATABASE_URI: Optional[str] = None
-    
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -36,42 +40,86 @@ class Settings(BaseSettings):
     SECRET_KEY: str = os.environ.get('SECRET_KEY')
     SCHEDULER_API_ENABLED: bool = True
 
+    def _replace_host(self, url: str, host: str, port: Optional[int] = None) -> str:
+        parsed = urlparse(url)
+        username = parsed.username or ""
+        password = parsed.password or ""
+        auth = ""
+
+        if username:
+            auth = username
+            if password:
+                auth += f":{password}"
+
+        host_port = host if port is None else f"{host}:{port}"
+        netloc = f"{auth}@{host_port}" if auth else host_port
+        return urlunparse(parsed._replace(netloc=netloc))
+
+    def _normalize_postgres_url(self, url: str) -> str:
+        url = url.replace("postgres://", "postgresql://", 1)
+
+        if self.POSTGRES_HOST:
+            url = self._replace_host(url, self.POSTGRES_HOST, self.POSTGRES_PORT)
+
+        return url
+
+    def _build_postgres_url(self) -> Optional[str]:
+        if self.DATABASE_URL:
+            if self.DATABASE_URL.startswith(("postgres://", "postgresql://", "postgresql+")):
+                return self._normalize_postgres_url(self.DATABASE_URL)
+
+        if self.POSTGRES_USER and self.POSTGRES_HOST and self.POSTGRES_DB:
+            credentials = self.POSTGRES_USER
+            if self.POSTGRES_PASSWORD:
+                credentials += f":{self.POSTGRES_PASSWORD}"
+
+            return (
+                f"postgresql://{credentials}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}"
+                f"/{self.POSTGRES_DB}"
+            )
+
+        return None
+
     def model_post_init(self, __context):
-        if self.DATABASE_URL.startswith("postgres"):
-            base_url = self.DATABASE_URL.replace("postgres://", "postgresql://")
-
-            self.SQLALCHEMY_SYNC_DATABASE_URI = base_url.replace(
-                "postgresql://", "postgresql+psycopg2://"
+        postgres_url = self._build_postgres_url()
+        if postgres_url:
+            self.SQLALCHEMY_SYNC_DATABASE_URI = postgres_url.replace(
+                "postgresql://", "postgresql+psycopg2://", 1
             )
-            
-            self.SQLALCHEMY_ASYNC_DATABASE_URI = base_url.replace(
-                "postgresql://", "postgresql+asyncpg://"
+            self.SQLALCHEMY_ASYNC_DATABASE_URI = postgres_url.replace(
+                "postgresql://", "postgresql+asyncpg://", 1
             )
+            return
 
-        elif self.DATABASE_URL.startswith("sqlite"):
+        if self.DATABASE_URL and self.DATABASE_URL.startswith("sqlite"):
             self.SQLALCHEMY_SYNC_DATABASE_URI = self.DATABASE_URL
-
             self.SQLALCHEMY_ASYNC_DATABASE_URI = self.DATABASE_URL.replace(
-                "sqlite:///", "sqlite+aiosqlite:///"
+                "sqlite:///", "sqlite+aiosqlite:///", 1
             )
+            logging.warning("SQLite DATABASE_URL is configured. Postgres is preferred.")
+            return
 
-        else: 
-            self.SQLALCHEMY_SYNC_DATABASE_URI = self.DATABASE_URL
-            self.SQLALCHEMY_ASYNC_DATABASE_URI = self.DATABASE_URL
+        raise ValueError(
+            "PostgreSQL configuration is required. Set DATABASE_URL to a postgres URL "
+            "or provide POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_HOST, POSTGRES_PORT and POSTGRES_DB."
+        )
 
 settings = Settings()
 
 
-def ensure_database_exists(sync_uri: str) -> None: 
+def ensure_database_exists(sync_uri: str) -> None:
     """
-    Checks if the PostgreSQL (or SQLite) database exists. 
-    If not, it creates a new database based on the provided URI.
+    Checks if the PostgreSQL database exists. If not, it creates the database.
+    SQLite and other non-PostgreSQL URIs are left untouched.
     """
 
     if not sync_uri:
-        return 
-    
-    try: 
+        return
+
+    if not sync_uri.startswith(("postgres://", "postgresql://", "postgresql+")):
+        return
+
+    try:
         engine = create_engine(sync_uri)
 
         if not database_exists(engine.url):

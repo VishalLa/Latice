@@ -32,7 +32,9 @@ class LedgerFormatModel(Base):
 
     __tablename__ = "ledger_format"
     __table_args__ = (
-        UniqueConstraint("run_id", "ledger_id", name="uq_ledger_format_ledger_id"),
+        UniqueConstraint(
+            "run_id", "ledger_id", name="uq_ledger_format_ledger_id"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -106,8 +108,9 @@ class BankStatementModel(Base):
 
     __tablename__ = "bank_statement"
     __table_args__ = (
-        UniqueConstraint("run_id", "row_index", "bank_name", "template_version",
-                          name="uq_bank_statement_row"),
+        UniqueConstraint(
+            "run_id", "row_index", "bank_name", "template_version", name="uq_bank_statement_row"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -145,7 +148,7 @@ class ReconciliationRunModel(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     template_id: Mapped[Optional[int]] = mapped_column(Integer)
 
-    task_id: Mapped[Optional[str]] = mapped_column(String(128))
+    task_id: Mapped[Optional[str]] = mapped_column(String(128), unique=True)
     ledger_source: Mapped[Optional[str]] = mapped_column(String(16))
     bank_name: Mapped[Optional[str]] = mapped_column(String(128))
     template_version: Mapped[Optional[str]] = mapped_column(String(32))
@@ -160,8 +163,12 @@ class ReconciliationRunModel(Base):
     unreconciled_ledger: Mapped[int] = mapped_column(Integer, default=0)
     unreconciled_bank: Mapped[int] = mapped_column(Integer, default=0)
 
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+
     run_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user.id"))
+
+    user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("user.id"))
     user: Mapped[Optional["User"]] = relationship(back_populates="reconciliation_runs")
 
     # Relationships
@@ -197,7 +204,7 @@ class MatchResultModel(Base):
 
     # 3. Relationships (Explicitly bound to the integer foreign keys)
     run: Mapped["ReconciliationRunModel"] = relationship(back_populates="match_results")
-    
+
     ledger_format: Mapped[Optional["LedgerFormatModel"]] = relationship(
         back_populates="match_results",
         foreign_keys=[ledger_format_id]
@@ -207,7 +214,7 @@ class MatchResultModel(Base):
         foreign_keys=[bank_statement_id]
     )
 
- 
+
 class IgnoredMetadataRecordModel(Base):
     """A zero-amount record silently dropped before matching begins."""
 
@@ -280,4 +287,4 @@ class AuditInvestigationItemModel(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
+    

@@ -236,7 +236,8 @@ def _write_ledger_entries(wb, gl_records: Sequence[LedgerFormat],
         _cell(ws, r, 6, rec.reference_id or "", align="center", bg=bg, border=_border())
         _cell(ws, r, 7, rec.debit_amount or None,  align="right", num_fmt=INR, bg=bg, border=_border())
         _cell(ws, r, 8, rec.credit_amount or None, align="right", num_fmt=INR, bg=bg, border=_border())
-        _cell(ws, r, 9, rec.source.value if rec.source else "", size=8, bg=bg, border=_border())
+        source_value = rec.source.value if hasattr(rec.source, "value") else (rec.source or "")
+        _cell(ws, r, 9, source_value, size=8, bg=bg, border=_border())
         _cell(ws, r, 10, "Matched" if matched else "Unmatched",
               align="center", bold=True, bg=bg, border=_border())
         _cell(ws, r, 11, info["phase"]     if info else "—", align="center", bg=bg, border=_border())

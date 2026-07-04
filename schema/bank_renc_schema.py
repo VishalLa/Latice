@@ -65,42 +65,6 @@ class LedgerSource(str, Enum):
 
 @dataclass
 class LedgerFormat:
-    """
-    One reconcilable row of the company's ledger, regardless of which path
-    produced it.
-
-    Path A (AUTO)
-    -------------
-    Populated by ledger_to_recon_records() which converts JournalEntry objects
-    (from build_ledger()) into this format.  Key fields:
-        ledger_id        → JournalEntry.entry_id
-        account_name     → vendor / buyer name (narration)
-        transaction_date → ISO date from the journal entry
-        debit_amount     → sum of debit lines for BANK/CASH account
-        credit_amount    → sum of credit lines for BANK/CASH account
-        reference_id     → invoice_number from the JournalEntry
-        source           → LedgerSource.AUTO
-        journal_entry_id → back-ref to the originating JournalEntry.entry_id
-
-    Path B (MANUAL)
-    ---------------
-    Populated by load_ledger_csv() reading a user-supplied CSV.  Key fields:
-        ledger_id        → from CSV column or auto-generated "L0001" …
-        account_name     → from "particulars" / "description" / "account_name" column
-        transaction_date → ISO date parsed from CSV
-        debit_amount     → from "debit" / "withdrawal" / "dr" column
-        credit_amount    → from "credit" / "deposit" / "cr" column
-        reference_id     → from "voucher_no" / "cheque_no" / "ref" column
-        source           → LedgerSource.MANUAL
-        journal_entry_id → None (no journal entry exists for manual records)
-
-    Fields common to both paths
-    ---------------------------
-    All matching logic (exact_match, fuzzy_match, ai_agent_match) depends only
-    on: ledger_id, account_name, transaction_date, debit_amount, credit_amount,
-    reference_id.  The extra fields (source, journal_entry_id, …) are metadata
-    for audit / UI display and are never read by the matchers.
-    """
 
     _id_counter:       ClassVar[int] = 1
 

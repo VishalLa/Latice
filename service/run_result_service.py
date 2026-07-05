@@ -16,23 +16,17 @@ from schema.bank_renc_schema import LedgerFormat as SchemaLedger, BankStatement 
 def find_run(
     session: Session, run_id: str, user_id: Optional[str] = None
 ) -> Optional[ReconciliationRunModel]:
-    """
-    Look up a run by its Celery task UUID (the `task_id` column) — the same
-    string used everywhere in the API: the /run_reconciliation response,
-    /run_result/{run_id}, /download_report/run/{run_id}, and the report
-    filename itself. Falls back to treating run_id as the internal integer
-    PK, for any caller that already has that instead.
-    """
+
     query = session.query(ReconciliationRunModel).filter(
-        ReconciliationRunModel.task_id == str(run_id)
+        ReconciliationRunModel.celery_task_id == str(run_id)
     ).order_by(ReconciliationRunModel.id.desc())
     if user_id is not None:
-        query = query.filter(ReconciliationRunModel.user_id == str(user_id))
+        query = query.filter(ReconciliationRunModel.user_id == user_id)
     run = query.first()
 
     if run is None and user_id is not None:
         query = session.query(ReconciliationRunModel).filter(
-            ReconciliationRunModel.task_id == str(run_id),
+            ReconciliationRunModel.celery_task_id == str(run_id),
             ReconciliationRunModel.user_id.is_(None),
         ).order_by(ReconciliationRunModel.id.desc())
         run = query.first()
@@ -47,7 +41,7 @@ def find_run(
                 ReconciliationRunModel.id == pk
             )
             if user_id is not None:
-                fallback = fallback.filter(ReconciliationRunModel.user_id == str(user_id))
+                fallback = fallback.filter(ReconciliationRunModel.user_id == user_id)
             run = fallback.first()
             if run is None and user_id is not None:
                 run = session.query(ReconciliationRunModel).filter(
@@ -78,8 +72,9 @@ def mark_run_status(
 def _build_matches(run: ReconciliationRunModel) -> List[Dict[str, Any]]:
     matches: List[Dict[str, Any]] = []
     for mr in run.match_results:
-        lid = mr.ledger_id or (mr.ledger_format.ledger_id if mr.ledger_format else None)
-        bid = mr.bank_id or (str(mr.bank_statement.row_index) if mr.bank_statement else None)
+
+        lid = mr.ledger_format.ledger_id if mr.ledger_format else None
+        bid = str(mr.bank_statement.row_index) if mr.bank_statement else None
         matches.append({
             "id": mr.id,
             "ledger_id": lid,
@@ -159,9 +154,8 @@ def fetch_run_bundle(
 ) -> Optional[Tuple[Dict[str, Any], List[SchemaLedger], List[SchemaBank]]]:
     """
     Full reconstruction of a run's reconciliation payload — matches, ledger
-    rows, bank rows. Used both by the report writer (via the Celery report
-    tasks) and by get_run_result() below. Returns None if the run isn't
-    found (or not owned by user_id).
+    rows, bank rows. Used both by the report writer and by get_run_result()
+    below. Returns None if the run isn't found (or not owned by user_id).
     """
     run = find_run(session, run_id, user_id)
     if run is None:
@@ -185,7 +179,7 @@ def fetch_run_bundle(
 
     recon_result: Dict[str, Any] = {
         "summary": {
-            "run_id": run.task_id or str(run.id),
+            "run_id": run.celery_task_id or str(run.id),
             "db_id": run.id,
             "status": run.status,
             "bank_name": run.bank_name,
@@ -234,7 +228,7 @@ def get_run_result(
         }
 
     status = (run.status or "processing").lower()
-    public_run_id = run.task_id or str(run.id)
+    public_run_id = run.celery_task_id or str(run.id)
 
     if status == "failed":
         return {

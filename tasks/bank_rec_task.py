@@ -6,22 +6,21 @@ from celery import chord
 
 from app.celery import app
 from database.session import get_session
-from database.bank_renc_model import ReconciliationRunModel, LedgerSource
 from service import PushEntryPointData
-from service.run_result_service import fetch_run_bundle, mark_run_status
+from service import fetch_run_bundle, mark_run_status
 from matcher import reconcile
 from entry_point.loader import load_bank_statement, load_ledger
-from schema import BankStatement, LedgerFormat, LedgerSource as SchemaLedgerSource
-from sqlalchemy.exc import ProgrammingError
+from schema.bank_renc_schema import LedgerFormat, BankStatement
+from sqlalchemy.orm import Session
 
 from matcher.test import print_reconciliation_results
 from service import write_bank_recon_xlsx
 
 
-QUEUE_DISPATCH = "queue_dispatch"       # run_reconciliation_pipeline (thin orchestrator)
-QUEUE_PREPROCESS = "queue_preprocess"   # process_pre_data
-QUEUE_RECONCILE = "queue_reconcile"     # run_matching
-QUEUE_POSTPROCESS = "queue_postprocess" # finalize_reconciliation
+QUEUE_DISPATCH = "queue_dispatch"        # run_reconciliation_pipeline (thin orchestrator)
+QUEUE_PREPROCESS = "queue_preprocess"    # process_pre_data
+QUEUE_RECONCILE = "queue_reconcile"      # run_matching
+QUEUE_POSTPROCESS = "queue_postprocess"  # finalize_reconciliation
 
 
 def _report_filename(run_id: str) -> str:
@@ -33,8 +32,6 @@ def _report_path(run_id: str) -> str:
 
 
 def _collect_all_matches(result: dict) -> list:
-    """reconcile() exposes matches split by phase; flatten them for the
-    generic 'matches' payload the DB-push task expects."""
     return (
         result.get("EXACT_MATCHES", []) +
         result.get("FUZZY_MATCHES", []) +
@@ -54,7 +51,6 @@ def _serialize_for_celery(data_list):
 
 
 def _deep_serialize(obj):
-    """Recursively serialize objects to JSON-friendly structures."""
     if obj is None or isinstance(obj, (str, int, float, bool)):
         return obj
 
@@ -84,37 +80,51 @@ def _deep_serialize(obj):
 
 
 def _serialize_loader_payload(data: dict) -> dict:
-
+    """
+    Make a load_ledger()/load_bank_statement() result JSON-safe so it can
+    cross the broker as a run_matching task argument — matching now runs in
+    a different worker process than the dispatcher, so it can't share
+    in-memory Python objects with it.
+    """
     safe = dict(data)
     if "records" in safe:
         safe["records"] = _serialize_for_celery(safe["records"])
     return safe
 
 
+def _rehydrate_records(records, record_cls):
+    """
+    Undo _serialize_for_celery(): turn the plain dicts that came back over
+    the Celery broker into real LedgerFormat/BankStatement instances again.
+
+    matcher.reconcile() (exact_matcher, fuzzy_matcher, ai_matcher,
+    residual_reconciler, ...) all use attribute access (e.g. `bank.debit`,
+    `gl.debit_amount`), not dict access. Without this step, records arrive
+    as plain dicts: getattr(dict, "debit_amount", 0.0) silently returns 0.0
+    instead of the real value (so early match phases can silently under-
+    match), and direct attribute access like `bank.debit` raises
+    AttributeError outright (the crash seen in ai_matcher.py).
+    """
+    if not records:
+        return records
+    valid_fields = {f.name for f in dataclasses.fields(record_cls)}
+    rehydrated = []
+    for r in records:
+        if isinstance(r, record_cls):
+            rehydrated.append(r)
+        elif isinstance(r, dict):
+            rehydrated.append(record_cls(**{k: v for k, v in r.items() if k in valid_fields}))
+        else:
+            rehydrated.append(r)
+    return rehydrated
+
+
 def _rehydrate_loader_payload(data: dict, record_cls) -> dict:
-    safe = dict(data)
-    records = []
-    for item in safe.get("records", []):
-        if isinstance(item, record_cls):
-            records.append(item)
-            continue
-        if not isinstance(item, dict):
-            records.append(item)
-            continue
-
-        payload = dict(item)
-        if record_cls is LedgerFormat and isinstance(payload.get("source"), str):
-            try:
-                payload["source"] = SchemaLedgerSource(payload["source"])
-            except ValueError:
-                payload["source"] = SchemaLedgerSource.MANUAL
-
-        valid_fields = getattr(record_cls, "__dataclass_fields__", {})
-        payload = {k: v for k, v in payload.items() if k in valid_fields}
-        records.append(record_cls(**payload))
-
-    safe["records"] = records
-    return safe
+    """Inverse of _serialize_loader_payload — used on the run_matching side."""
+    live = dict(data)
+    if "records" in live:
+        live["records"] = _rehydrate_records(live["records"], record_cls)
+    return live
 
 
 @app.task(bind=True, max_retries=3, queue=QUEUE_PREPROCESS)
@@ -150,10 +160,10 @@ def process_pre_data(self, statements_data, ledgers_data, run_id=None):
 @app.task(bind=True, max_retries=3, queue=QUEUE_RECONCILE)
 def run_matching(self, ledger_data, bank_data, all_warnings, run_db_id=None):
     """
-    STAGE 1b (parallel) — runs the actual ledger<->bank matching. This only
+    STAGE 1b (parallel) — runs the actual ledger<->bank matching. Only
     needs the in-memory loaded records (not anything process_pre_data
-    writes), so it's safe to run at the same time as pre-processing, on its
-    own worker (queue_reconcile).
+    writes), so it's safe to run at the same time as pre-processing, on
+    its own worker (queue_reconcile).
     """
     try:
         ledger_data = _rehydrate_loader_payload(ledger_data, LedgerFormat)
@@ -191,8 +201,6 @@ def finalize_reconciliation(
     run_id=None,
     ledger_path=None,
     bank_path=None,
-    gl_count=0,
-    bank_count=0,
 ):
     """
     STAGE 2 — the chord callback. Celery only invokes this once BOTH
@@ -201,10 +209,10 @@ def finalize_reconciliation(
     [process_pre_data_result, run_matching_result].
 
     This is the dedicated 3rd worker (queue_postprocess): pushes match
-    results, updates summary counters, generates the report, and is the
-    ONLY place that marks a run "success" — so if this never runs, or
-    fails, the run correctly stays out of "success" state instead of the
-    frontend being told everything's fine.
+    rows, ignored/audit rows, updates summary counters, generates the
+    report, and is the ONLY place that marks a run "success" — so if this
+    never runs, or fails, the run correctly stays out of "success" state
+    instead of the frontend being told everything's fine.
     """
     pre_result, match_result = parallel_results
 
@@ -218,20 +226,23 @@ def finalize_reconciliation(
 
         all_matches = _collect_all_matches(result)
         matches_list = _serialize_for_celery(all_matches)
-
         ignored_list = _serialize_for_celery(result.get("IGNORED_METADATA", []))
-        for item in ignored_list:
-            if "ledger_id" in item:
-                item["row_ref"] = item.pop("ledger_id")
-            elif "row_index" in item:
-                item["row_ref"] = str(item.pop("row_index"))
-
         audit_list = _serialize_for_celery(result.get("AUDIT_INVESTIGATION", []))
 
         with get_session() as session:
+            # Writes MatchResultModel rows for the newer match categories.
+            PushEntryPointData.push_match_result_rows(
+                session,
+                run_id=run_db_id,
+                timing_matches=result.get("RESIDUAL_TIMING_MATCHES", []),
+                split_matches=result.get("RESIDUAL_SPLIT_MATCHES", []),
+                suggested_journal_entries=result.get("SUGGESTED_JOURNAL_ENTRIES", []),
+                other_matches=all_matches,
+            )
+
             success = PushEntryPointData.push_reconciliation_results(
                 session=session,
-                matches_data=matches_list,
+                matches_data=[],
                 ignored_data=ignored_list,
                 audit_data=audit_list,
                 run_id=run_db_id,
@@ -239,17 +250,7 @@ def finalize_reconciliation(
             if not success:
                 raise RuntimeError(f"push_reconciliation_results failed for run_id={run_db_id}")
 
-            PushEntryPointData.update_run_summary(
-                session,
-                run_db_id,
-                ledger_records=gl_count,
-                bank_records=bank_count,
-                exact_matches=len(result.get("EXACT_MATCHES", [])),
-                fuzzy_matches=len(result.get("FUZZY_MATCHES", [])) + len(result.get("MEMORY_MATCHES", [])),
-                ai_matches=len(result.get("AI_MATCHES", [])),
-                unreconciled_ledger=len(result.get("UNRECONCILED_ITEMS", {}).get("ledger", [])),
-                unreconciled_bank=len(result.get("UNRECONCILED_ITEMS", {}).get("bank", [])),
-            )
+            PushEntryPointData.update_run_summary(session, run_db_id, result.get("summary", {}))
 
             marked = mark_run_status(session, run_db_id, "success")
             if not marked:
@@ -306,7 +307,8 @@ def finalize_reconciliation(
 @app.task(bind=True, max_retries=3, queue=QUEUE_DISPATCH)
 def run_reconciliation_pipeline(self, ledger_path, bank_path, user_id=None):
     """
-    Thin dispatcher only, now. Loads the files, creates/reuses the run row,
+    Thin dispatcher only. Loads the files, creates the run row via
+    create_run() (idempotent against celery_task_id's unique constraint),
     then fans out pre-processing and matching to run CONCURRENTLY on two
     separate workers via a Celery chord — finalize_reconciliation (a 3rd,
     separate worker) fires only once both are done.
@@ -325,44 +327,24 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path, user_id=None):
         ledgers_list = _serialize_for_celery(gl_records)
 
         with get_session() as session:
-            existing = session.query(ReconciliationRunModel).filter(
-                ReconciliationRunModel.task_id == run_id
-            ).first()
-            if existing is not None:
-                db_run = existing
-                run_db_id = db_run.id
-            else:
-                try:
-                    db_run = ReconciliationRunModel(
-                        task_id=run_id,
-                        bank_name=bank_data.get("bank_name"),
-                        template_version=bank_data.get("template_version"),
-                        bank_csv_path=bank_path,
-                        ledger_csv_path=ledger_path,
-                        ledger_source=LedgerSource.MANUAL.value,
-                        user_id=str(user_id) if user_id else None,
-                    )
-                    session.add(db_run)
-                    session.commit()
-                    run_db_id = db_run.id
-                except ProgrammingError as exc:
-                    if "task_id" in str(exc).lower() and "reconciliation_run" in str(exc).lower():
-                        session.rollback()
-                        db_run = ReconciliationRunModel(
-                            bank_name=bank_data.get("bank_name"),
-                            template_version=bank_data.get("template_version"),
-                            bank_csv_path=bank_path,
-                            ledger_csv_path=ledger_path,
-                            ledger_source=LedgerSource.MANUAL.value,
-                            user_id=str(user_id) if user_id else None,
-                        )
-                        session.add(db_run)
-                        session.commit()
-                        run_db_id = db_run.id
-                    else:
-                        raise
+            db_run = PushEntryPointData.create_run(
+                session,
+                celery_task_id=run_id,
+                bank_name=bank_data.get("bank_name"),
+                template_version=bank_data.get("template_version"),
+                ledger_source=ledger_data.get("source"),
+                bank_csv_path=bank_path,
+                ledger_csv_path=ledger_path,
+            )
+            if db_run is None:
+                raise RuntimeError(f"create_run returned None for run_id={run_id}")
+            if user_id is not None and db_run.user_id != user_id:
+                db_run.user_id = user_id
+                session.commit()
+            run_db_id = db_run.id
 
         all_warnings = ledger_data.get("warnings", []) + bank_data.get("warnings", [])
+
 
         ledger_payload = _serialize_loader_payload(ledger_data)
         bank_payload = _serialize_loader_payload(bank_data)
@@ -385,8 +367,6 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path, user_id=None):
             run_id=run_id,
             ledger_path=ledger_path,
             bank_path=bank_path,
-            gl_count=len(gl_records),
-            bank_count=len(bank_records),
         )
         chord(header)(callback)
 
@@ -426,7 +406,6 @@ def get_data_from_db(self, user_id: int, run_id: str, filename: str = None):
 
 @app.task(bind=True)
 def generate_report_from_db(self, run_id: str, user_id: int = None, filename: str = None):
-
     try:
         with get_session() as session:
             bundle = fetch_run_bundle(session, run_id, user_id)

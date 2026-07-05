@@ -9,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from werkzeug.utils import secure_filename
 
 from database.session import get_session
-from service.run_result_service import get_run_result
+from service import get_run_result
 from tasks.bank_rec_task import (
     run_reconciliation_pipeline,
     generate_report_from_db,

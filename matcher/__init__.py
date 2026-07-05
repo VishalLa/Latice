@@ -6,6 +6,7 @@ from .ai_matcher import ai_matcher_pipeline
 from .confidence import annotate_match_confidence
 from .same_side_detect import detect_same_side
 from .memory import MatchMemory
+from .residual_reconciler import reconcile_residuals
 
 TOLERANCES = {
     "EXACT":              0.0,
@@ -135,6 +136,7 @@ def reconcile(
     auto_detect_same_side: bool = True,
     memory: Optional["MatchMemory"] = None,
     llm=None,
+    enable_residual_reconciliation: bool = True,
 ) -> dict:
     gl_records   = ledger_result["records"]
     bank_records = bank_result["records"]
@@ -208,6 +210,25 @@ def reconcile(
             f"Residual records require manual review."
         )
 
+    residual_result: Optional[dict] = None
+    if enable_residual_reconciliation and (final_unreconciled["ledger"] or final_unreconciled["bank"]):
+        residual_result = reconcile_residuals(
+            final_unreconciled["ledger"],
+            final_unreconciled["bank"],
+            same_side=same_side,
+            llm=llm,
+        )
+        if residual_result["stats"].get("ai_skipped"):
+            all_warnings.append(
+                f"Residual journal-entry drafting fell back to heuristic rules: "
+                f"{residual_result['stats'].get('ai_skip_reason', 'AI layer unavailable')}."
+            )
+        # Shrink the final unreconciled pool to whatever steps 2-5 didn't resolve.
+        final_unreconciled = {
+            "ledger": residual_result["still_unreconciled_ledger"],
+            "bank":   residual_result["still_unreconciled_bank"],
+        }
+
     exact_matches_annotated = [
         annotate_match_confidence({**m, "match_phase": "exact"})
         for m in exact_match_result.get("EXACT_MATCHES", [])
@@ -276,6 +297,9 @@ def reconcile(
             "ai_skipped":          ai_skipped,
             "match_quality":       quality,
             "memory":              memory_stats,
+            "residual_reconciliation": (
+                residual_result["stats"] if residual_result else None
+            ),
         },
         "EXACT_MATCHES":      exact_matches_annotated,
         "FUZZY_MATCHES":      fuzzy_matches_annotated,
@@ -283,10 +307,12 @@ def reconcile(
         "AI_MATCHES":         ai_matches_annotated,
         "AI_AGENT":           ai_matches_annotated,
         "AI_AUDIT_QUEUE":     ai_audit_queue_annotated,  # low-confidence → human review
+        "RESIDUAL_TIMING_MATCHES":    (residual_result or {}).get("timing_matches", []),
+        "RESIDUAL_SPLIT_MATCHES":     (residual_result or {}).get("split_matches", []),
+        "SUGGESTED_JOURNAL_ENTRIES":  (residual_result or {}).get("suggested_journal_entries", []),
+        "HUMAN_REVIEW_QUEUE":         (residual_result or {}).get("human_review_queue", []),
         "UNRECONCILED_ITEMS": final_unreconciled,
         "IGNORED_METADATA":   fuzzy_match_result.get("IGNORED_METADATA",   []),
         "AUDIT_INVESTIGATION": fuzzy_match_result.get("AUDIT_INVESTIGATION", []),
         "warnings":           all_warnings,
     }
-
-

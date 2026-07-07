@@ -97,99 +97,8 @@ def _get_run_result_sync(run_id: str, user_id: Optional[str]) -> dict:
     with get_session() as session:
         return get_run_result(session, run_id, user_id)
 
-
-@router.get("/run_status/{run_id}")
-async def run_status(run_id: str, user_id: Optional[str] = Query(None)):
-
-    data = await run_in_threadpool(_get_run_result_sync, run_id, user_id)
-
-    payload = {"run_id": data.get("run_id", run_id), "state": data["state"]}
-    if data["state"] == "FAILURE":
-        payload["error"] = data.get("error")
-    elif data["state"] == "SUCCESS":
-        payload["result"] = {
-            "summary": data.get("summary", {}),
-            "download_url": data.get("download_url"),
-        }
-    return payload
-
-
-@router.get("/run_result/{run_id}")
-async def run_result(run_id: str, user_id: Optional[str] = Query(None)):
-
-    data = await run_in_threadpool(_get_run_result_sync, run_id, user_id)
-
-    if data["state"] == "FAILURE":
-        return JSONResponse(status_code=500, content=data)
-    if data["state"] != "SUCCESS":
-        return JSONResponse(status_code=202, content=data)
-    return data
-
-
-@router.get("/download_report/run/{run_id}")
-async def download_report_by_run(run_id: str, user_id: Optional[str] = Query(None)):
-
-    safe_run_id = secure_filename(run_id)
-    path = _report_path(safe_run_id)
-
-    if os.path.exists(path):
-        return FileResponse(
-            path,
-            filename=_report_filename(safe_run_id),
-            media_type="application/octet-stream",
-        )
-
-    if user_id is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Report file not found on disk and no user_id supplied "
-                "to regenerate it from the database. Pass ?user_id=... "
-                "or re-run the reconciliation."
-            ),
-        )
-
-    task = await run_in_threadpool(
-        lambda: generate_report_from_db.apply(args=[safe_run_id], kwargs={"user_id": user_id})
-    )
-    outcome = await run_in_threadpool(task.get) if hasattr(task, "get") else task
-
-    if not outcome or outcome.get("status") != "success":
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "Report not found and could not be regenerated.", "detail": outcome},
-        )
-
-    return FileResponse(
-        outcome["path"],
-        filename=_report_filename(safe_run_id),
-        media_type="application/octet-stream",
-    )
-
-
-@router.get("/download_report/{filename}")
-async def download_report(filename: str):
-    """Legacy filename-based download — kept for backward compatibility."""
-    safe_name = secure_filename(filename)
-    path = os.path.join(UPLOAD_FOLDER, safe_name)
-
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Report not found")
-    return FileResponse(path, filename=safe_name)
-
-
-@router.post("/generate_report/run/{run_id}", status_code=202)
-async def generate_report_run(run_id: str, body: Optional[dict] = Body(None)):
-    """Trigger (async) database-backed report regeneration for a run."""
-    try:
-        user_id = body.get("user_id") if body else None
-        task = generate_report_from_db.delay(run_id, user_id=user_id)
-        return {"message": "Report generation started", "task_id": task.id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-    
-@router.get("/previous-runs/{user_id}")
+        
+@router.get("/get/previous-runs/{user_id}")
 def get_previous_runs(user_id: str, session: Session = Depends(get_db)):
     try:
         user = session.query(User).filter_by(id=user_id).first()
@@ -227,8 +136,6 @@ def get_previous_runs(user_id: str, session: Session = Depends(get_db)):
             ],
         }
 
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -252,3 +159,71 @@ async def get_previous_run_result(user_id: str, run_id: str):
     if data["state"] != "SUCCESS":
         return JSONResponse(status_code=202, content=data)
     return data
+
+
+@router.post("/generate_report/run/{run_id}", status_code=202)
+async def generate_report_run(run_id: str, body: Optional[dict] = Body(None)):
+    """Trigger (async) database-backed report regeneration for a run."""
+    try: 
+        user_id = body.get("user_id") if body else None 
+        task = generate_report_from_db.delay(run_id, user_id=user_id)
+
+        return {
+            "message": "Report generation started",
+            "task_id": task.id
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+@router.get("/download_report/{filename}")
+async def download_report(filename: str):
+    """Legacy filename-based download — kept for backward compatibility."""
+    safe_name = secure_filename(filename)
+    path = os.path.join(UPLOAD_FOLDER, safe_name)
+
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Report not found")
+    return FileResponse(path, filename=safe_name)
+
+
+@router.get("/download_report/run/{run_id}")
+async def download_report_by_run(run_id: str, user_id: Optional[str] = Query(None)):
+    safe_run_id = secure_filename(run_id)
+    path = _report_path(safe_run_id)
+
+    if os.path.exists(path):
+        return FileResponse(
+            path,
+            filename=_report_filename(safe_run_id),
+            media_type="application/octet-stream",
+        )
+    
+    if user_id is None: 
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Report file not found on disk and no user_id supplied "
+                "to regenerate it from the database. Pass ?user_id=... "
+                "or re-run the reconciliation."
+            ),
+        )
+    
+    task = await run_in_threadpool(
+        lambda: generate_report_from_db.apply(args=[safe_run_id], kwargs={"user_id": user_id})
+    )
+    outcome = await run_in_threadpool(task.get) if hasattr(task, "get") else task
+
+    if not outcome or outcome.get("status") != "success":
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Report not found and could not be regenerated.", "detail": outcome},
+        )
+    
+    return FileResponse(
+        outcome["path"],
+        filename=_report_filename(safe_run_id),
+        media_type="application/octet-stream",
+    )
+    

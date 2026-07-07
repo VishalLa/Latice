@@ -251,9 +251,6 @@ def fetch_run_bundle(
         "FUZZY_MATCHES": [m for m in matches if m.get("match_type") == "fuzzy"],
         "MEMORY_MATCHES": [m for m in matches if m.get("match_type") == "memory"],
         "AI_MATCHES": [m for m in matches if m.get("match_type") in ("ai", "ai_queue")],
-        # These three were previously stored (via push_match_result_rows /
-        # PushEntryPointData) but never read back out here, so historical
-        # runs always showed them as empty even when the data existed.
         "RESIDUAL_TIMING_MATCHES": [m for m in matches if m.get("match_type") == "residual_timing"],
         "RESIDUAL_SPLIT_MATCHES": [m for m in matches if m.get("match_type") == "residual_split"],
         "SUGGESTED_JOURNAL_ENTRIES": _build_suggested_journal_entries(matches),

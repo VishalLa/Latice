@@ -9,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from schema.bank_renc_schema import BankStatement, LedgerFormat
+from core.config import settings
 
 CONFIDENCE_THRESHOLD: float = 0.75
 
@@ -41,11 +42,11 @@ class AIManyToOneOutput(BaseModel):
 
 def _prepare_llm() -> ChatOllama:
     return ChatOllama(
-        model="phi3",
+        model=settings.OLLAMA_NAME,
         temperature=0.0,
         num_ctx=8192,
         repeat_penalty=1.1,
-        base_url="http://127.0.0.1:11434",
+        base_url=settings.OLLAMA_URL,
     )
 
 _SHARED_LLM: Optional[ChatOllama] = None

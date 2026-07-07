@@ -23,6 +23,18 @@ services:
     networks:
       - backend_network
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama_service
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_ORIGINS=*
+      - OLLAMA_HOST=0.0.0.0
+    volumes:
+      - ollama_storage:/root/.ollama
+    restart: always
+
   backend:
     build: .
     container_name: bank_rec_backend
@@ -66,4 +78,3 @@ volumes:
 networks:
   backend_network:
     driver: bridge
-

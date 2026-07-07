@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: Optional[str] = None
 
+    OLLAMA_NAME: str = "phi3:latest"
+    OLLAMA_URL: str= "http://0.0.0.0:11434"
+
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
 

@@ -3,12 +3,15 @@ import uuid
 import tempfile
 from typing import Optional
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Body, Form
+from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Body, Form, Depends
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 from werkzeug.utils import secure_filename
+from sqlalchemy.orm import Session
 
-from database.session import get_session
+from database.session import get_session, get_db
+from database.user import User
+from database.bank_renc_model import ReconciliationRunModel
 from service import get_run_result
 from tasks.bank_rec_task import (
     run_reconciliation_pipeline,
@@ -185,3 +188,67 @@ async def generate_report_run(run_id: str, body: Optional[dict] = Body(None)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
+    
+@router.get("/previous-runs/{user_id}")
+def get_previous_runs(user_id: str, session: Session = Depends(get_db)):
+    try:
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="No user found"
+            )
+
+        runs = (
+            session.query(ReconciliationRunModel)
+            .filter_by(user_id=user_id)
+            .order_by(ReconciliationRunModel.run_at.desc())
+            .all()
+        )
+
+        return {
+            "user_id": user_id,
+            "runs": [
+                {
+                    "run_id": run.celery_task_id or str(run.id),
+                    "status": run.status,
+                    "bank_name": run.bank_name,
+                    "template_version": run.template_version,
+                    "run_at": run.run_at.isoformat() if run.run_at else None,
+                    "ledger_records": run.ledger_records,
+                    "bank_records": run.bank_records,
+                    "exact_matches": run.exact_matches,
+                    "fuzzy_matches": run.fuzzy_matches,
+                    "ai_matches": run.ai_matches,
+                    "unreconciled_ledger": run.unreconciled_ledger,
+                    "unreconciled_bank": run.unreconciled_bank,
+                }
+                for run in runs
+            ],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail="Network Error"
+        )
+
+
+@router.get("/previous-runs/{user_id}/{run_id}")
+async def get_previous_run_result(user_id: str, run_id: str):
+    """
+    Fetch one previous run's full result by its (public) run_id, scoped to
+    user_id — same shape as GET /run_result/{run_id}, just nested under the
+    previous-runs path so a "run history" list can link straight to a
+    result without the frontend having to know about the separate
+    run_result endpoint.
+    """
+    data = await run_in_threadpool(_get_run_result_sync, run_id, user_id)
+
+    if data["state"] == "FAILURE":
+        return JSONResponse(status_code=500, content=data)
+    if data["state"] != "SUCCESS":
+        return JSONResponse(status_code=202, content=data)
+    return data

@@ -160,7 +160,7 @@ class ReconciliationRunModel(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text)
 
     run_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user.id"))
+    user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("user.id"))
     user: Mapped[Optional["User"]] = relationship(back_populates="reconciliation_runs")
 
     match_results: Mapped[List["MatchResultModel"]] = relationship(back_populates="run", cascade="all, delete-orphan")
@@ -261,4 +261,3 @@ class AuditInvestigationItemModel(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    

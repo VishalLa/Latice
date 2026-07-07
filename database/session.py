@@ -77,3 +77,15 @@ def get_session():
     finally:
         session.close()
         db_session.remove()
+
+
+def get_db():
+    session = db_session()
+    try:
+        yield session
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+        db_session.remove()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -10,6 +11,36 @@ from database.bank_renc_model import (
     BankStatementModel,
 )
 from schema.bank_renc_schema import LedgerFormat as SchemaLedger, BankStatement as SchemaBank
+
+
+_DRAFT_DETAILS_RE = re.compile(
+    r"^DRAFT \(([^,]+), confidence ([^,]+), source ([^)]+)\):\s*.*?\s-\s(.*)$",
+    re.DOTALL,
+)
+
+
+def _parse_dr_cr_accounts(adjustment_type: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    if not adjustment_type:
+        return None, None
+    parts = adjustment_type.split(" Dr / ")
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return None, None
+
+
+def _parse_draft_details(details: Optional[str]) -> Dict[str, Optional[str]]:
+    if not details:
+        return {"status": None, "confidence": None, "source": None, "entry_narrative": None}
+    match = _DRAFT_DETAILS_RE.match(details.strip())
+    if not match:
+        return {"status": None, "confidence": None, "source": None, "entry_narrative": details}
+    status, confidence, source, narrative = match.groups()
+    return {
+        "status": status.strip(),
+        "confidence": confidence.strip(),
+        "source": source.strip(),
+        "entry_narrative": narrative.strip(),
+    }
 
 
 
@@ -87,6 +118,27 @@ def _build_matches(run: ReconciliationRunModel) -> List[Dict[str, Any]]:
             "details": mr.details,
         })
     return matches
+
+
+def _build_suggested_journal_entries(matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    for m in matches:
+        if m.get("match_type") != "residual_draft":
+            continue
+        debit_account, credit_account = _parse_dr_cr_accounts(m.get("adjustment_type"))
+        parsed = _parse_draft_details(m.get("details"))
+        entries.append({
+            "bank_id": m.get("bank_id"),
+            "date": m.get("date"),
+            "amount": m.get("amount"),
+            "debit_account": debit_account,
+            "credit_account": credit_account,
+            "entry_narrative": parsed["entry_narrative"],
+            "confidence": parsed["confidence"] or m.get("confidence_score"),
+            "source": parsed["source"],
+            "status": parsed["status"] or "pending_review",
+        })
+    return entries
 
 
 def _split_match_ids(raw: Any) -> set[str]:
@@ -199,6 +251,12 @@ def fetch_run_bundle(
         "FUZZY_MATCHES": [m for m in matches if m.get("match_type") == "fuzzy"],
         "MEMORY_MATCHES": [m for m in matches if m.get("match_type") == "memory"],
         "AI_MATCHES": [m for m in matches if m.get("match_type") in ("ai", "ai_queue")],
+        # These three were previously stored (via push_match_result_rows /
+        # PushEntryPointData) but never read back out here, so historical
+        # runs always showed them as empty even when the data existed.
+        "RESIDUAL_TIMING_MATCHES": [m for m in matches if m.get("match_type") == "residual_timing"],
+        "RESIDUAL_SPLIT_MATCHES": [m for m in matches if m.get("match_type") == "residual_split"],
+        "SUGGESTED_JOURNAL_ENTRIES": _build_suggested_journal_entries(matches),
         "UNRECONCILED_ITEMS": {
             "ledger": unreconciled_gl_objs,
             "bank": unreconciled_bank_objs,

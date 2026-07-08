@@ -810,7 +810,7 @@ def load_bank_statement(
             reader = csv.DictReader(fh)
             if not reader.fieldnames:
                 raise ValueError("No header row found at the expected position.")
-            reader.fieldnames = [c.strip() for c in reader.fieldnames]
+            reader.fieldnames = [c.strip().lstrip("\ufeff") for c in reader.fieldnames]
             field_count = len(reader.fieldnames)
             raw_rows    = list(reader)
 

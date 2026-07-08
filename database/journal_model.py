@@ -19,6 +19,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
+from .bank_renc_model import ReconciliationRunModel
+from .user import User
 
 class DrCr(str, enum.Enum):
     DEBIT = "Dr"
@@ -62,11 +64,24 @@ class JournalEntryModel(Base):
         ForeignKey("match_result.id")
     )
 
+    run_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("reconciliation_run.id"), index=True
+    )
+    user_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("user.id"), index=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     period: Mapped["FiscalPeriodModel"] = relationship(back_populates="journal_entries")
     lines: Mapped[List["EntryLineModel"]] = relationship(
         back_populates="journal_entry", cascade="all, delete-orphan"
+    )
+    run: Mapped[Optional["ReconciliationRunModel"]] = relationship(
+        backref="journal_entries"
+    )
+    user: Mapped[Optional["User"]] = relationship(
+        backref="journal_entries"
     )
 
 

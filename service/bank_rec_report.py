@@ -457,7 +457,8 @@ def _write_suggested_journal_entries(wb, entries: list) -> None:
 
     r = _title(ws, 1, "PHASE 4 · STEP 4 - SUGGESTED JOURNAL ENTRIES", 10,
                f"{len(entries)} draft entries for accountant review. Set the Status column to "
-               f"APPROVED or MODIFIED, then post via journal_posting.approve_journal_entries().")
+               f"APPROVED or MODIFIED, then post via "
+               f"store_data.PushEntryPointData.push_journal_entries().")
     r = _col_headers(ws, r, [
         "#", "Bank Row", "Date", "Amount (₹)", "Debit A/c", "Credit A/c",
         "Narration", "Confidence", "Source", "Status",
@@ -483,6 +484,54 @@ def _write_suggested_journal_entries(wb, entries: list) -> None:
         _cell(ws, r, 9,  e.get("source", ""),                align="center", size=8, italic=True, bg=bg, border=_border())
         _cell(ws, r, 10, e.get("status", "pending_review"),  align="center", bold=True, bg=C_AMBER_BG, border=_border())
         r += 1
+
+def _write_posted_journal_entries(wb, entries: list) -> None:
+    """
+    Entries that have actually been posted to the ledger (real
+    JournalEntryModel + EntryLineModel rows), as opposed to the drafts in
+    the Suggested Journal Entries sheet. Each entry is shown as its two
+    Dr/Cr lines so the double-entry is visible directly in the report.
+    """
+    ws = wb.create_sheet("Posted Journal Entries")
+    ws.sheet_view.showGridLines = False
+    _set_col_widths(ws, [4, 10, 12, 12, 22, 12, 14, 38, 14])
+
+    r = _title(ws, 1, "POSTED JOURNAL ENTRIES", 9,
+               f"{len(entries)} entries posted to the ledger this run "
+               f"(via store_data.PushEntryPointData.push_journal_entries())")
+    r = _col_headers(ws, r, [
+        "#", "Entry ID", "Date", "Dr/Cr", "Account", "Amount (₹)",
+        "Voucher Type", "Narration", "Source Match ID",
+    ])
+    ws.freeze_panes = f"A{r}"
+
+    if not entries:
+        return _empty_notice(ws, r, "No journal entries have been posted for this run yet.", 9)
+
+    for i, je in enumerate(entries, 1):
+        bg = C_GREEN_BG if i % 2 == 0 else C_TEAL_BG
+        lines = je.get("lines") or []
+        first_row_of_entry = True
+        for ln in lines:
+            ws.row_dimensions[r].height = 18
+            dr_cr = ln.get("dr_cr", "")
+            _cell(ws, r, 1, i if first_row_of_entry else "",
+                  align="center", size=8, bg=bg, border=_border())
+            _cell(ws, r, 2, je.get("id") if first_row_of_entry else "",
+                  align="center", bg=bg, border=_border())
+            _cell(ws, r, 3, je.get("entry_date", "") if first_row_of_entry else "",
+                  align="center", bg=bg, border=_border())
+            _cell(ws, r, 4, dr_cr, align="center", bold=True, bg=bg, border=_border())
+            _cell(ws, r, 5, ln.get("account_name", ""), bg=bg, border=_border())
+            _cell(ws, r, 6, ln.get("amount"), align="right", num_fmt=INR, bg=bg, border=_border())
+            _cell(ws, r, 7, je.get("voucher_type", "") if first_row_of_entry else "",
+                  size=8, bg=bg, border=_border())
+            _cell(ws, r, 8, ln.get("narration") or je.get("narration", ""),
+                  size=8, wrap=True, bg=bg, border=_border())
+            _cell(ws, r, 9, je.get("source_match_result_id", "") if first_row_of_entry else "",
+                  align="center", size=8, italic=True, bg=bg, border=_border())
+            r += 1
+            first_row_of_entry = False
 
 def _write_human_review_queue(wb, queue: list) -> None:
     ws = wb.create_sheet("Human Review Queue")
@@ -666,6 +715,7 @@ def write_bank_recon_xlsx(
     _write_timing_matches(wb,         recon_result.get("RESIDUAL_TIMING_MATCHES",   []))
     _write_split_matches(wb,          recon_result.get("RESIDUAL_SPLIT_MATCHES",    []))
     _write_suggested_journal_entries(wb, recon_result.get("SUGGESTED_JOURNAL_ENTRIES", []))
+    _write_posted_journal_entries(wb, recon_result.get("POSTED_JOURNAL_ENTRIES", []))
     _write_human_review_queue(wb,     recon_result.get("HUMAN_REVIEW_QUEUE", []))
     _write_audit_investigation(wb,    recon_result.get("AUDIT_INVESTIGATION", []))
     _write_ignored_metadata(wb,       recon_result.get("IGNORED_METADATA", []))

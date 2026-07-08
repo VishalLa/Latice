@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Optional
+import calendar
 from datetime import date, datetime
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
@@ -13,6 +14,12 @@ from database.bank_renc_model import (
     MatchResultModel,
     ReconciliationRunModel,
 )
+from database.journal_model import (
+    FiscalPeriodModel,
+    JournalEntryModel,
+    EntryLineModel,
+    DrCr,
+)
 
 def _coerce_date(value: Any) -> Optional[date]:
     if value is None or isinstance(value, date):
@@ -26,12 +33,58 @@ def _coerce_date(value: Any) -> Optional[date]:
             return None
     return None
 
+
+def _safe_user_id(user_id: Optional[str], max_len: int = 36) -> Optional[str]:
+    """
+    reconciliation_run.user_id is varchar(36) (sized for a UUID FK). A
+    caller-supplied value that's too long previously blew up an unguarded
+    commit downstream with StringDataRightTruncation, after the run row
+    had *already* been committed — leaving an orphaned row that made every
+    retry hit the celery_task_id unique constraint. Validate here instead
+    of letting Postgres reject it mid-transaction.
+    """
+    if user_id is None:
+        return None
+    user_id = str(user_id).strip()
+    if not user_id:
+        return None
+    if len(user_id) > max_len:
+        print(
+            f"⚠️  user_id {user_id!r} is {len(user_id)} chars, exceeds the "
+            f"{max_len}-char column limit — storing run without a user_id "
+            f"instead of failing the whole run."
+        )
+        return None
+    return user_id
+
 def _coerce_row_dates(data: Dict[str, Any], date_fields: List[str]) -> Dict[str, Any]:
     out = dict(data)
     for f in date_fields:
         if f in out:
             out[f] = _coerce_date(out[f])
     return out
+
+
+def _get_or_create_fiscal_period(session: Session, entry_date: date) -> FiscalPeriodModel:
+    """
+    JournalEntryModel.period_id is NOT NULL, so posting a journal entry
+    always needs a FiscalPeriodModel row for that entry's month. Get the
+    existing one (label = "YYYY-MM") or create it — flush (not commit) so
+    the caller's transaction stays in charge of when this becomes durable.
+    """
+    label = entry_date.strftime("%Y-%m")
+    period = session.query(FiscalPeriodModel).filter_by(label=label).first()
+    if period is not None:
+        return period
+
+    start = entry_date.replace(day=1)
+    last_day = calendar.monthrange(entry_date.year, entry_date.month)[1]
+    end = entry_date.replace(day=last_day)
+
+    period = FiscalPeriodModel(label=label, start_date=start, end_date=end, is_closed=False)
+    session.add(period)
+    session.flush()  # need period.id below without ending the transaction
+    return period
 
 
 def _build_fk_lookups(session: Session, run_id: Optional[int]) -> "tuple[Dict[str, int], Dict[int, int]]":
@@ -207,7 +260,44 @@ class PushEntryPointData:
         ledger_source: Optional[str] = None,
         bank_csv_path: Optional[str] = None,
         ledger_csv_path: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[ReconciliationRunModel]:
+        safe_user_id = _safe_user_id(user_id)
+
+        if celery_task_id is not None:
+            try:
+                existing = session.query(ReconciliationRunModel).filter_by(
+                    celery_task_id=celery_task_id
+                ).first()
+            except SQLAlchemyError as e:
+                session.rollback()
+                print(f"Database error while looking up existing reconciliation run: {e}")
+                existing = None
+
+            if existing is not None:
+                changed = False
+                for field, value in (
+                    ("bank_name", bank_name),
+                    ("template_version", template_version),
+                    ("ledger_source", ledger_source),
+                    ("bank_csv_path", bank_csv_path),
+                    ("ledger_csv_path", ledger_csv_path),
+                ):
+                    if value is not None and getattr(existing, field) != value:
+                        setattr(existing, field, value)
+                        changed = True
+                if safe_user_id is not None and existing.user_id != safe_user_id:
+                    existing.user_id = safe_user_id
+                    changed = True
+                if changed:
+                    try:
+                        session.commit()
+                        session.refresh(existing)
+                    except SQLAlchemyError as e:
+                        session.rollback()
+                        print(f"Database error while updating existing reconciliation run: {e}")
+                return existing
+
         try:
             run = ReconciliationRunModel(
                 celery_task_id=celery_task_id,
@@ -216,6 +306,7 @@ class PushEntryPointData:
                 ledger_source=ledger_source,
                 bank_csv_path=bank_csv_path,
                 ledger_csv_path=ledger_csv_path,
+                user_id=safe_user_id,
             )
             session.add(run)
             session.commit()
@@ -224,6 +315,14 @@ class PushEntryPointData:
         except SQLAlchemyError as e:
             session.rollback()
             print(f"Database error while creating reconciliation run: {e}")
+            if celery_task_id is not None:
+                try:
+                    return session.query(ReconciliationRunModel).filter_by(
+                        celery_task_id=celery_task_id
+                    ).first()
+                except SQLAlchemyError as lookup_exc:
+                    session.rollback()
+                    print(f"Database error while recovering existing reconciliation run: {lookup_exc}")
             return None
 
     @staticmethod
@@ -375,6 +474,121 @@ class PushEntryPointData:
             return False
 
     @staticmethod
+    def push_journal_entries(
+        session: Session,
+        entries: List[Dict[str, Any]],
+        run_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Post approved SUGGESTED_JOURNAL_ENTRIES drafts as real, double-entry
+        JournalEntryModel + EntryLineModel rows — the "approve, then post"
+        step the report's Suggested Journal Entries sheet asks for.
+
+        Each item in `entries` is expected to have the shape produced by
+        run_result_service._build_suggested_journal_entries(): bank_id,
+        date, amount, debit_account, credit_account, entry_narrative,
+        confidence, source, status. Only entries whose status is
+        "approved" or "modified" (case-insensitive) are posted — anything
+        still "pending_review" (the default) is skipped, not silently
+        dropped: it's reported back so the caller knows what didn't post
+        and why.
+
+        Idempotent per run: an entry already posted for a given bank_id
+        (traced back through its match_result row) is not posted again,
+        so calling this twice with the same reviewed sheet is safe.
+
+        Returns {"posted": int, "skipped": [str, ...], "journal_entry_ids": [...]}
+        (or {"posted": 0, "skipped": [...], "error": str} on a DB failure).
+        """
+        skipped: List[str] = []
+        posted: List[JournalEntryModel] = []
+
+        try:
+            bank_to_match_id: Dict[str, int] = {}
+            if run_id is not None:
+                rows = (
+                    session.query(MatchResultModel.id, BankStatementModel.row_index)
+                    .join(BankStatementModel, MatchResultModel.bank_statement_id == BankStatementModel.id)
+                    .filter(MatchResultModel.run_id == run_id)
+                    .all()
+                )
+                bank_to_match_id = {str(row_index): mr_id for mr_id, row_index in rows}
+
+            already_posted_match_ids: set = set()
+            if run_id is not None:
+                already_posted_match_ids = {
+                    match_id for (match_id,) in session.query(JournalEntryModel.source_match_result_id)
+                    .filter(
+                        JournalEntryModel.run_id == run_id,
+                        JournalEntryModel.source_match_result_id.isnot(None),
+                    ).all()
+                }
+
+            for e in entries:
+                bank_id = e.get("bank_id")
+                status = str(e.get("status", "")).strip().lower()
+
+                if status not in ("approved", "modified"):
+                    skipped.append(f"bank_id={bank_id!r}: status is {status or 'pending_review'!r}, not approved/modified")
+                    continue
+
+                debit_account  = e.get("debit_account")
+                credit_account = e.get("credit_account")
+                amount         = e.get("amount")
+                if not debit_account or not credit_account or amount is None:
+                    skipped.append(f"bank_id={bank_id!r}: missing debit_account/credit_account/amount")
+                    continue
+
+                match_id = bank_to_match_id.get(str(bank_id)) if bank_id is not None else None
+                if match_id is not None and match_id in already_posted_match_ids:
+                    skipped.append(f"bank_id={bank_id!r}: already posted for this run")
+                    continue
+
+                entry_date = _coerce_date(e.get("date")) or datetime.utcnow().date()
+                period = _get_or_create_fiscal_period(session, entry_date)
+                narrative = e.get("entry_narrative") or ""
+
+                je = JournalEntryModel(
+                    period_id=period.id,
+                    entry_date=entry_date,
+                    voucher_type="Bank Reconciliation Adjustment",
+                    narration=narrative,
+                    is_reconciliation_entry=True,
+                    source_match_result_id=match_id,
+                    run_id=run_id,
+                    user_id=user_id,
+                )
+                je.lines = [
+                    EntryLineModel(account_name=debit_account, dr_cr=DrCr.DEBIT,
+                                   amount=amount, narration=narrative),
+                    EntryLineModel(account_name=credit_account, dr_cr=DrCr.CREDIT,
+                                   amount=amount, narration=narrative),
+                ]
+                session.add(je)
+                posted.append(je)
+                if match_id is not None:
+                    already_posted_match_ids.add(match_id)
+
+            if not posted:
+                return {"posted": 0, "skipped": skipped, "journal_entry_ids": []}
+
+            session.commit()
+            for je in posted:
+                session.refresh(je)
+
+            return {
+                "posted": len(posted),
+                "skipped": skipped,
+                "journal_entry_ids": [je.id for je in posted],
+            }
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            print(f"Database error while posting journal entries: {e}")
+            return {"posted": 0, "skipped": skipped, "error": str(e)}
+
+    @staticmethod
     def push_ignored_records(session: Session, ignored_data: List[Dict[str, Any]]) -> bool:
         try:
             db_ignored = [IgnoredMetadataRecordModel(**data) for data in ignored_data]
@@ -406,15 +620,6 @@ class PushEntryPointData:
         audit_data: List[Dict[str, Any]],
         run_id: Optional[int] = None,
     ) -> bool:
-        """
-        NOTE: matches_data previously went through MatchPatternModel(**data)
-        — wrong table (see push_match_results docstring above) and would
-        raise TypeError for any real match dict. Now routed through the
-        same shared MatchResultModel expansion/FK-resolution logic.
-
-        Pass run_id whenever it's known, for correctly-scoped FK
-        resolution of matches_data.
-        """
         try:
             db_matches, unresolved = _expand_matches_to_rows(
                 session, run_id, other_matches=matches_data,

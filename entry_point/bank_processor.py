@@ -21,7 +21,7 @@ def _read_header_candidates(
             for i, row in enumerate(reader):
                 if i > max_skip:
                     break
-                cols = [c.strip() for c in row]
+                cols = [c.strip().lstrip("\ufeff") for c in row]
                 if len(cols) >= 3:
                     candidates.append((i, cols))
 
@@ -94,4 +94,3 @@ def detect_bank(
 
     debug_info["match_type"] = "none"
     return None, None, debug_info
-

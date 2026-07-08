@@ -335,12 +335,10 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path, user_id=None):
                 ledger_source=ledger_data.get("source"),
                 bank_csv_path=bank_path,
                 ledger_csv_path=ledger_path,
+                user_id=user_id,
             )
             if db_run is None:
                 raise RuntimeError(f"create_run returned None for run_id={run_id}")
-            if user_id is not None and db_run.user_id != user_id:
-                db_run.user_id = user_id
-                session.commit()
             run_db_id = db_run.id
 
         all_warnings = ledger_data.get("warnings", []) + bank_data.get("warnings", [])

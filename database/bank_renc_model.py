@@ -208,6 +208,7 @@ class IgnoredMetadataRecordModel(Base):
         nullable=False,
         default="Zero-amount metadata / header row — excluded from reconciliation.",
     )
+    run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("reconciliation_run.id"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -260,5 +261,7 @@ class AuditInvestigationItemModel(Base):
         nullable=False,
         default="Bank Reversal detected; requires manual General Ledger journal entry.",
     )
+    run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("reconciliation_run.id"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    

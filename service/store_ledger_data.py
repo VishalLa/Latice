@@ -15,12 +15,16 @@ from database.ledger_tax_models import (
     GSTR1RecordModel,
 )
 
+
 def fy_label_for_date(d) -> str:
+    """'2026-04-10' (Apr-Mar FY) -> '2026-27'; a Jan-Mar date belongs to the FY that started the previous April."""
     year = d.year if d.month >= 4 else d.year - 1
     return f"{year}-{str(year + 1)[-2:]}"
 
 
 class PushLedgerData:
+    """Pushes ledger/journal.py + ledger/tds.py + ledger/gstr1.py engine
+    output into the DB, scoped to the owning user."""
 
     @staticmethod
     def prime_tds_engine_aggregates(
@@ -30,6 +34,13 @@ class PushLedgerData:
         financial_year: str,
         tds_engine,
     ) -> None:
+        """
+        Load this deductee's running totals (all sections, this user, this
+        FY) from TDSAggregateModel into tds_engine._aggregates before
+        calling tds_engine.process_bill(), so aggregate-threshold sections
+        (194J, 194H, 194C, 194D, 194A...) see prior payments correctly even
+        though each bill is processed by a separate TDSEngine() instance.
+        """
         key = deductee_name.lower().strip()
         rows = session.query(TDSAggregateModel).filter(
             TDSAggregateModel.user_id == user_id,
@@ -46,6 +57,9 @@ class PushLedgerData:
         financial_year: str,
         tds_engine,
     ) -> None:
+        """Write tds_engine._aggregates back to TDSAggregateModel after
+        process_bill() has run (upsert), so the next bill for the same
+        deductee starts from the correct running total."""
         try:
             for (deductee_key, section_code), running in tds_engine._aggregates.items():
                 existing = session.query(TDSAggregateModel).filter(
@@ -112,6 +126,7 @@ class PushLedgerData:
         tds_entry: TDSEntry,
         journal_entry_model: Optional[JournalEntryModel] = None,
     ) -> Optional[TDSEntryModel]:
+        """Persist one TDSEntry, linked back to its JournalEntryModel if known."""
         try:
             model = TDSEntryModel(
                 entry_id=tds_entry.entry_id,
@@ -151,6 +166,11 @@ class PushLedgerData:
         period_label: str,
         gstr1: dict,
     ) -> bool:
+        """
+        Replace all GSTR1Record rows for (user_id, period_label) with the
+        output of ledger.gstr1.build_gstr1(). Idempotent: safe to re-run a
+        period's GSTR-1 generation after new bills come in.
+        """
         try:
             session.query(GSTR1RecordModel).filter(
                 GSTR1RecordModel.user_id == user_id,

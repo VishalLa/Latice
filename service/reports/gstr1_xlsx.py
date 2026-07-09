@@ -1,3 +1,25 @@
+"""
+GSTR-1 Outward Supplies Return — XLSX Export
+
+Converts the dict produced by gstr1_builder.build_gstr1() into a
+formatted Excel workbook.
+
+Sheets produced:
+  1. Cover          — filing period, totals at a glance
+  2. B2B (Table 4)  — invoice-wise B2B taxable outward supplies
+  3. B2C (Table 7)  — B2C large inter-state supplies (consolidated)
+  4. Nil & Exempt (Table 8) — nil-rated / exempt / non-GST summary
+  5. HSN Summary (Table 12) — HSN/SAC-wise outward supply summary
+
+Usage
+-----
+    from gstr1_builder import build_gstr1
+    from gstr1_xlsx    import write_gstr1_xlsx
+
+    gstr1 = build_gstr1(bills, period_label="Apr-2025")
+    write_gstr1_xlsx(gstr1, "GSTR1_Apr2025.xlsx")
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -7,6 +29,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+# ── Colour palette (matches ledger/bank_recon xlsx palette) ──────────────────
 C_HEADER_BG  = "1E3A5F"
 C_HEADER_FG  = "FFFFFF"
 C_SUBHEADER  = "2E6DA4"
@@ -23,17 +46,23 @@ C_WARN_BG    = "FCE4D6"
 
 INR = "\u20b9#,##0.00"
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def _side(style="thin", color=C_BORDER):
     return Side(style=style, color=color)
+
 
 def _border(style="thin"):
     s = _side(style)
     return Border(left=s, right=s, top=s, bottom=s)
 
+
 def _thick_bottom():
     t = _side("thin")
     m = _side("medium", "000000")
     return Border(left=t, right=t, top=t, bottom=m)
+
 
 def _cell(ws, row, col, value=None, *, bold=False, size=9, bg=None,
           fg="000000", align="left", num_fmt=None, italic=False,
@@ -49,9 +78,11 @@ def _cell(ws, row, col, value=None, *, bold=False, size=9, bg=None,
         c.border = border
     return c
 
+
 def _set_widths(ws, widths: list[float]) -> None:
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
+
 
 def _title_block(ws, row: int, title: str, n_cols: int,
                  subtitle: str = "", table_ref: str = "") -> int:
@@ -69,6 +100,7 @@ def _title_block(ws, row: int, title: str, n_cols: int,
         row += 1
     return row + 1  # blank gap
 
+
 def _col_headers(ws, row: int, headers: list[str]) -> int:
     ws.row_dimensions[row].height = 22
     for c, h in enumerate(headers, 1):
@@ -76,8 +108,10 @@ def _col_headers(ws, row: int, headers: list[str]) -> int:
               bg=C_SUBHEADER, fg=C_HEADER_FG, align="center", border=_border())
     return row + 1
 
+
 def _total_row(ws, row: int, label: str, n_cols: int,
                values: dict[int, float]) -> int:
+    """Write a grand-total row. values = {col_index: amount}."""
     ws.row_dimensions[row].height = 22
     merge_end_col = min(values.keys()) - 1 if values else n_cols
     ws.merge_cells(f"A{row}:{get_column_letter(merge_end_col)}{row}")
@@ -88,6 +122,9 @@ def _total_row(ws, row: int, label: str, n_cols: int,
               bg=C_GRAND_BG, fg=C_GRAND_FG, align="right",
               num_fmt=INR, border=_thick_bottom())
     return row + 1
+
+
+# ── Sheet 1 — Cover ───────────────────────────────────────────────────────────
 
 def _write_cover(wb: openpyxl.Workbook, gstr1: dict) -> None:
     ws = wb.create_sheet("Cover")
@@ -147,6 +184,7 @@ def _write_cover(wb: openpyxl.Workbook, gstr1: dict) -> None:
             _cell(ws, r, 3, "", bg=bg, border=_border())
         r += 1
 
+    # Warnings list
     warnings = gstr1.get("warnings", [])
     if warnings:
         r += 1
@@ -163,6 +201,9 @@ def _write_cover(wb: openpyxl.Workbook, gstr1: dict) -> None:
             _cell(ws, r, 2, w, size=9, wrap=True,
                   bg=C_WARN_BG, border=_border())
             r += 1
+
+
+# ── Sheet 2 — B2B (Table 4) ───────────────────────────────────────────────────
 
 def _write_b2b(wb: openpyxl.Workbook, rows: list[dict], period: str) -> None:
     ws = wb.create_sheet("B2B (Table 4)")
@@ -229,6 +270,9 @@ def _write_b2b(wb: openpyxl.Workbook, rows: list[dict], period: str) -> None:
         13: round(tot_cess,   2),
     })
 
+
+# ── Sheet 3 — B2C Large (Table 7) ────────────────────────────────────────────
+
 def _write_b2c_large(wb: openpyxl.Workbook, rows: list[dict], period: str) -> None:
     ws = wb.create_sheet("B2C Large (Table 7)")
     ws.sheet_view.showGridLines = False
@@ -271,6 +315,9 @@ def _write_b2c_large(wb: openpyxl.Workbook, rows: list[dict], period: str) -> No
         6: round(tot_cess,    2),
     })
 
+
+# ── Sheet 4 — Nil & Exempt (Table 8) ─────────────────────────────────────────
+
 def _write_nil_exempt(wb: openpyxl.Workbook, nil: dict, period: str) -> None:
     ws = wb.create_sheet("Nil & Exempt (Table 8)")
     ws.sheet_view.showGridLines = False
@@ -299,6 +346,7 @@ def _write_nil_exempt(wb: openpyxl.Workbook, nil: dict, period: str) -> None:
         _cell(ws, r, 4, total or None, align="right", num_fmt=INR, bg=C_TOTAL_BG, border=_border())
         r += 1
 
+    # Grand total
     ws.row_dimensions[r].height = 22
     grand = round(nil["total_nil"] + nil["total_exempt"] + nil["total_non_gst"], 2)
     grand_b2b = round(nil["nil_rated_b2b"] + nil["exempt_b2b"] + nil["non_gst_b2b"], 2)
@@ -313,6 +361,7 @@ def _write_nil_exempt(wb: openpyxl.Workbook, nil: dict, period: str) -> None:
           bg=C_GRAND_BG, fg=C_GRAND_FG, align="right", num_fmt=INR, border=_thick_bottom())
     r += 1
 
+    # Notes
     r += 1
     notes = [
         "Nil-Rated : Supplies attracting 0% GST (e.g. fresh vegetables, grains, books).",
@@ -326,6 +375,9 @@ def _write_nil_exempt(wb: openpyxl.Workbook, nil: dict, period: str) -> None:
         ws.merge_cells(f"A{r}:D{r}")
         _cell(ws, r, 1, note, size=8, italic=True, fg="595959")
         r += 1
+
+
+# ── Sheet 5 — HSN Summary (Table 12) ─────────────────────────────────────────
 
 def _write_hsn_summary(wb: openpyxl.Workbook, rows: list[dict], period: str) -> None:
     ws = wb.create_sheet("HSN Summary (Table 12)")
@@ -398,6 +450,13 @@ def write_gstr1_xlsx(
     gstr1:       dict,
     output_path: Path | str,
 ) -> None:
+    """
+    Write a GSTR-1 workbook from the dict returned by build_gstr1().
+
+    Args:
+        gstr1       : dict from gstr1_builder.build_gstr1()
+        output_path : destination .xlsx file path
+    """
     path   = Path(output_path)
     wb     = openpyxl.Workbook()
     wb.remove(wb.active)

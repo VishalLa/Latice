@@ -1,3 +1,15 @@
+"""
+General Ledger Export to XLSX
+
+Writes all data that lives inside a GeneralLedger object into a formatted
+Excel workbook.  Call write_ledger_xlsx() after build_ledger() returns.
+
+Sheets produced:
+  1. Trial Balance      — closing debit / credit per account, grouped by AccountGroup
+  2. Ledger Accounts    — T-account style posting history for every account
+  3. Cash Book          — combined Cash + Bank running balance
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -12,6 +24,7 @@ from openpyxl.utils import get_column_letter
 from schema import AccountGroup, CashBookLine
 from ledger.ledger import GeneralLedger, TrialBalance, trial_balance, extract_cash_book
 
+# ── Colour palette ───────────────────────────────────────────────────────────
 C_HEADER_BG  = "1E3A5F"
 C_HEADER_FG  = "FFFFFF"
 C_SUBHEADER  = "2E6DA4"
@@ -26,6 +39,7 @@ C_CREDIT_BG  = "E0F0FF"
 
 INR = "\u20b9#,##0.00"
 
+# Schedule III display order (liabilities → assets → income → expenses)
 _GROUP_ORDER = [
     AccountGroup.CAPITAL_ACCOUNT.value,
     AccountGroup.RESERVES_SURPLUS.value,
@@ -49,14 +63,19 @@ _GROUP_ORDER = [
     AccountGroup.INDIRECT_EXPENSES.value,
 ]
 
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
 def _border(style="thin", color=C_BORDER):
     s = Side(style=style, color=color)
     return Border(left=s, right=s, top=s, bottom=s)
+
 
 def _thick_bottom():
     t = Side(style="thin",   color=C_BORDER)
     m = Side(style="medium", color="000000")
     return Border(left=t, right=t, top=t, bottom=m)
+
 
 def _cell(ws, row, col, value=None, *, bold=False, size=9, bg=None,
           fg="000000", align="left", num_fmt=None, italic=False,
@@ -72,6 +91,7 @@ def _cell(ws, row, col, value=None, *, bold=False, size=9, bg=None,
         c.border = border
     return c
 
+
 def _title(ws, row: int, text: str, n_cols: int, subtitle: str = "") -> int:
     ws.row_dimensions[row].height = 32
     ws.merge_cells(f"A{row}:{get_column_letter(n_cols)}{row}")
@@ -86,11 +106,15 @@ def _title(ws, row: int, text: str, n_cols: int, subtitle: str = "") -> int:
         row += 1
     return row + 1
 
+
 def _section_header(ws, row: int, text: str, n_cols: int) -> int:
     ws.row_dimensions[row].height = 20
     ws.merge_cells(f"A{row}:{get_column_letter(n_cols)}{row}")
     _cell(ws, row, 1, text, bold=True, size=9, bg=C_SECTION_BG)
     return row + 1
+
+
+# ── Sheet 1 — Trial Balance ──────────────────────────────────────────────────
 
 def _write_trial_balance(wb: openpyxl.Workbook, tb: TrialBalance) -> None:
     ws = wb.create_sheet("Trial Balance")
@@ -154,6 +178,9 @@ def _write_trial_balance(wb: openpyxl.Workbook, tb: TrialBalance) -> None:
           bg=C_GRAND_BG, fg=C_GRAND_FG, align="right",
           num_fmt=INR, border=_thick_bottom())
 
+
+# ── Sheet 2 — Ledger Accounts ────────────────────────────────────────────────
+
 def _write_ledger_accounts(wb: openpyxl.Workbook, gl: GeneralLedger) -> None:
     ws = wb.create_sheet("Ledger Accounts")
     ws.sheet_view.showGridLines = False
@@ -175,6 +202,7 @@ def _write_ledger_accounts(wb: openpyxl.Workbook, gl: GeneralLedger) -> None:
 
         bal_amt, bal_side = ledger_acc.closing_balance
 
+        # Account banner
         ws.row_dimensions[r].height = 22
         ws.merge_cells(f"A{r}:G{r}")
         _cell(ws, r, 1,
@@ -184,6 +212,7 @@ def _write_ledger_accounts(wb: openpyxl.Workbook, gl: GeneralLedger) -> None:
               bg=C_HEADER_BG, fg=C_HEADER_FG, border=_border())
         r += 1
 
+        # Column headers
         hdrs = ["#", "Date", "Particulars", "Voucher Type", "Dr (₹)", "Cr (₹)", "Balance"]
         ws.row_dimensions[r].height = 18
         for c, h in enumerate(hdrs, 1):
@@ -206,6 +235,7 @@ def _write_ledger_accounts(wb: openpyxl.Workbook, gl: GeneralLedger) -> None:
                   align="right", bg=alt, border=_border())
             r += 1
 
+        # Closing balance row
         ws.row_dimensions[r].height = 20
         ws.merge_cells(f"A{r}:D{r}")
         _cell(ws, r, 1, "Closing Balance", bold=True, size=9,
@@ -217,6 +247,9 @@ def _write_ledger_accounts(wb: openpyxl.Workbook, gl: GeneralLedger) -> None:
         _cell(ws, r, 7, f"₹{bal_amt:,.2f} {bal_side}", bold=True, size=9,
               bg=C_TOTAL_BG, align="right", border=_thick_bottom())
         r += 2
+
+
+# ── Sheet 3 — Cash Book ──────────────────────────────────────────────────────
 
 def _write_cash_book(wb: openpyxl.Workbook, lines: list[CashBookLine]) -> None:
     ws = wb.create_sheet("Cash Book")
@@ -272,11 +305,22 @@ def _write_cash_book(wb: openpyxl.Workbook, lines: list[CashBookLine]) -> None:
           num_fmt=INR, border=_thick_bottom())
     _cell(ws, r, 8, "", bg=C_GRAND_BG, border=_thick_bottom())
 
+
+# ── Public API ───────────────────────────────────────────────────────────────
+
 def write_ledger_xlsx(
     gl:          GeneralLedger,
     output_path: Path | str,
     as_on=None,
 ) -> None:
+    """
+    Write Trial Balance, Ledger Accounts and Cash Book to an Excel workbook.
+
+    Args:
+        gl          : GeneralLedger populated by build_ledger()
+        output_path : destination .xlsx path
+        as_on       : date for the trial balance (defaults to today)
+    """
     path = Path(output_path)
     wb   = openpyxl.Workbook()
     wb.remove(wb.active)

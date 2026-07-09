@@ -10,11 +10,12 @@ from database.session import get_session
 from database.ledger_tax_models import JournalEntryModel
 from service.rebuild_ledger_data import rebuild_journal_entries
 from service import write_journal_xlsx
-from ._scoping import current_user, scope_owner_id
+from api._scoping import current_user, scope_owner_id
 
 app = Blueprint("journal_api", __name__)
 
 EXPORT_DIR = tempfile.gettempdir()
+
 
 def _parse_date(val: str | None, fallback: date) -> date:
     if not val:
@@ -23,6 +24,7 @@ def _parse_date(val: str | None, fallback: date) -> date:
         return datetime.strptime(val, "%Y-%m-%d").date()
     except ValueError:
         return fallback
+
 
 def _query_journal_entries(session, owner_id, date_from, date_to):
     q = session.query(JournalEntryModel).filter(
@@ -33,9 +35,16 @@ def _query_journal_entries(session, owner_id, date_from, date_to):
         q = q.filter(JournalEntryModel.user_id == owner_id)
     return q.order_by(JournalEntryModel.date.asc()).all()
 
+
 @app.route("", methods=["GET"])
 @jwt_required()
 def list_journal_entries():
+    """
+    GET /api/journal?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD[&user_id=...]
+
+    Regular users always see only their own entries. Admins see every
+    user's entries unless ?user_id=... is supplied to drill into one.
+    """
     with get_session() as session:
         user = current_user(session)
         owner_id, err = scope_owner_id(user, request.args.get("user_id"))
@@ -71,6 +80,7 @@ def list_journal_entries():
                 for m, e in zip(models, entries)
             ],
         }), 200
+
 
 @app.route("/export", methods=["GET"])
 @jwt_required()

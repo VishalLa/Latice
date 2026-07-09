@@ -1,14 +1,33 @@
+"""
+Bill-scanning pipeline: turns one uploaded Bill into a persisted
+JournalEntry (+lines) and, if applicable, a persisted TDSEntry.
+Mirrors the shape of tasks/bank_rec_task.py.
+
+Two entry points:
+
+  process_bill_task(bill_id)
+      Runs for one bill. If the bill already has raw_extracted_data
+      (e.g. pushed by an API that already ran OCR, or a test fixture),
+      OCR is skipped. Otherwise it runs OCR + parse_invoice on
+      bill.source_file. Then: to_journal_entry -> TDSEngine.process_bill
+      -> persist JournalEntryModel/lines and TDSEntryModel.
+
+  generate_gstr1_task(user_id, period_label, period_start, period_end)
+      Rebuilds every GSTR-1 table for one filing period from all of that
+      user's "output"-direction, successfully-processed bills whose
+      bill_date falls in [period_start, period_end]. Idempotent — safe to
+      re-run after new bills are added for the same period.
+"""
 from __future__ import annotations
 
 from datetime import date as date_
 from typing import Optional
 
 from app.celery import app
-from core.config import settings
 from database.session import get_session
 from database.ledger_tax_models import BillModel
 from service import PushLedgerData, fy_label_for_date
-from ledger import to_journal_entry, TDSEngine,  build_gstr1 
+from ledger import to_journal_entry, TDSEngine, build_gstr1
 
 
 def _safe_float(val) -> float:
@@ -16,11 +35,29 @@ def _safe_float(val) -> float:
         return float(val)
     except (TypeError, ValueError):
         return 0.0
-    
+
+
 def _normalize_bill_dict(
     bill_dict: dict, blocks=None, source_file: Optional[str] = None,
     fallback_direction: Optional[str] = None,
 ) -> dict:
+    """
+    entry_point/data_extractor.py's parse_invoice() does NOT set a
+    direction/_direction key, and the two downstream consumers disagree on
+    the key name: ledger/journal.py reads bill["_direction"] while
+    ledger/gstr1.py reads bill["direction"]. parse_invoice() also never
+    sets "_status", which to_journal_entry() requires to equal "ok".
+
+    This function is the missing glue: it classifies direction (reusing
+    entry_point.data_extractor.classify_direction/detect_type when OCR
+    blocks are available), then writes BOTH direction keys and _status so
+    every downstream module reads consistent values regardless of which
+    key name it happens to look for.
+
+    `fallback_direction` should be the owning BillModel.direction column
+    — used when the dict itself has neither key (e.g. data written before
+    this normalization existed) instead of silently defaulting to "input".
+    """
     if "direction" in bill_dict or "_direction" in bill_dict:
         direction = bill_dict.get("_direction") or bill_dict.get("direction")
 
@@ -45,6 +82,10 @@ def _normalize_bill_dict(
 
 
 def _run_ocr_and_extract(image_path: str) -> dict:
+    """Runs OCR + parse_invoice on a bill image, then normalizes the
+    result (see _normalize_bill_dict). Only imported lazily — paddleocr is
+    a heavy optional dependency and shouldn't block loading this module
+    for callers that only pass in pre-extracted bill dicts."""
     from entry_point.ocr import get_ocr
     from entry_point.data_extractor import parse_invoice
 
@@ -54,8 +95,12 @@ def _run_ocr_and_extract(image_path: str) -> dict:
     return _normalize_bill_dict(bill_dict, blocks=blocks, source_file=image_path)
 
 
-@app.task(bind=True, max_retries=3, queue=settings.QUEUE_BILL_LEDGER)
+@app.task(bind=True, max_retries=3)
 def process_bill_task(self, bill_id: str):
+    """
+    Process one Bill row: OCR (if needed) -> journal entry -> TDS check
+    -> persist. Updates BillModel.status to "processed" or "failed".
+    """
     try:
         with get_session() as session:
             bill = session.query(BillModel).filter(BillModel.id == bill_id).first()
@@ -74,6 +119,7 @@ def process_bill_task(self, bill_id: str):
                     bill_dict = _normalize_bill_dict(bill_dict, source_file=bill.source_file, fallback_direction=bill.direction)
                     bill.raw_extracted_data = bill_dict
 
+                # Keep BillModel's own columns in sync with what was extracted
                 bill.invoice_number = bill.invoice_number or bill_dict.get("invoice_number")
                 bill.vendor_name = bill.vendor_name or bill_dict.get("vendor_name")
                 bill.direction = bill_dict.get("_direction", bill.direction or "input")
@@ -141,9 +187,9 @@ def process_bill_task(self, bill_id: str):
 
     except Exception as exc:
         raise self.retry(exc=exc, countdown=5)
-    
 
-@app.task(bind=True, max_retries=3, queue=settings.QUEUE_BILL_LEDGER)
+
+@app.task(bind=True, max_retries=3)
 def generate_gstr1_task(
     self,
     user_id: str,
@@ -151,6 +197,7 @@ def generate_gstr1_task(
     period_start: str,   # ISO "YYYY-MM-DD"
     period_end: str,     # ISO "YYYY-MM-DD"
 ):
+    """Rebuild GSTR-1 (B2B/B2C-Large/Nil-rated/HSN) for one user + period."""
     try:
         start = date_.fromisoformat(period_start)
         end = date_.fromisoformat(period_end)

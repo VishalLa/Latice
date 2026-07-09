@@ -70,12 +70,18 @@ class PushBankRecData:
             if run is None:
                 print(f"update_run_summary: no run found for run_id={run_id}")
                 return False
-            for field in (
-                "ledger_records", "bank_records", "exact_matches",
-                "fuzzy_matches", "ai_matches", "unreconciled_ledger", "unreconciled_bank",
-            ):
-                if field in summary and summary[field] is not None:
-                    setattr(run, field, summary[field])
+            field_map = {
+                "ledger_records": "ledger_record_count",  # summary dict key -> model column
+                "bank_records": "bank_records",
+                "exact_matches": "exact_matches",
+                "fuzzy_matches": "fuzzy_matches",
+                "ai_matches": "ai_matches",
+                "unreconciled_ledger": "unreconciled_ledger",
+                "unreconciled_bank": "unreconciled_bank",
+            }
+            for summary_key, column_name in field_map.items():
+                if summary_key in summary and summary[summary_key] is not None:
+                    setattr(run, column_name, summary[summary_key])
             session.commit()
             return True
         except SQLAlchemyError as e:

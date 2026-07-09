@@ -59,7 +59,7 @@ class LedgerFormatModel(Base):
     vendor_name: Mapped[Optional[str]] = mapped_column(String(255))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    run: Mapped[Optional["ReconciliationRunModel"]] = relationship(back_populates="ledger_records")
+    run: Mapped[Optional["ReconciliationRunModel"]] = relationship(back_populates="ledger_format_rows")
     match_results: Mapped[List["MatchResultModel"]] = relationship(back_populates="ledger_format")
 
     @property
@@ -152,12 +152,14 @@ class ReconciliationRunModel(Base):
     unreconciled_bank: Mapped[int] = mapped_column(Integer, default=0)
 
     run_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    status: Mapped[Optional[str]] = mapped_column(String(16), default="processing")
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
     user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("user.id"))
     user: Mapped[Optional["User"]] = relationship(back_populates="reconciliation_runs")
 
     match_results: Mapped[List["MatchResultModel"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     bank_statements: Mapped[List["BankStatementModel"]] = relationship(back_populates="run")
-    ledger_records: Mapped[List["LedgerFormatModel"]] = relationship(back_populates="run")
+    ledger_format_rows: Mapped[List["LedgerFormatModel"]] = relationship(back_populates="run")
 
 
 class MatchResultModel(Base):
@@ -264,4 +266,3 @@ class AuditInvestigationItemModel(Base):
     run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("reconciliation_run.id"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    

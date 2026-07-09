@@ -1,3 +1,15 @@
+"""
+TDS Register Export to XLSX
+
+There was no existing writer for TDS data anywhere in reports/ — this is
+new. Written to match the visual conventions of reports/journal_xlsx.py
+and reports/ledger_xlsx.py (same palette, same header/border helpers).
+
+Sheets produced:
+  1. TDS Register     — one row per deduction, full audit trail
+  2. Section Summary   — one row per TDS section (194J, 194C, ...)
+  3. Deductee Summary  — one row per deductee, useful for threshold review
+"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,6 +21,7 @@ from openpyxl.utils import get_column_letter
 
 from schema import TDSRegister
 
+# ── Colour palette (matches journal_xlsx.py / ledger_xlsx.py) ───────────────
 C_HEADER_BG  = "1E3A5F"
 C_HEADER_FG  = "FFFFFF"
 C_SUBHEADER  = "2E6DA4"
@@ -20,9 +33,11 @@ C_BORDER     = "BFBFBF"
 
 INR = "\u20b9#,##0.00"
 
+
 def _border(style="thin", color=C_BORDER):
     s = Side(style=style, color=color)
     return Border(left=s, right=s, top=s, bottom=s)
+
 
 def _cell(ws, row, col, value=None, *, bold=False, size=9, bg=None,
           fg="000000", align="left", num_fmt=None, italic=False,
@@ -38,6 +53,7 @@ def _cell(ws, row, col, value=None, *, bold=False, size=9, bg=None,
         c.border = border
     return c
 
+
 def _title(ws, row: int, text: str, n_cols: int, subtitle: str = "") -> int:
     ws.row_dimensions[row].height = 32
     ws.merge_cells(f"A{row}:{get_column_letter(n_cols)}{row}")
@@ -52,6 +68,7 @@ def _title(ws, row: int, text: str, n_cols: int, subtitle: str = "") -> int:
         row += 1
     return row + 1
 
+
 def _headers(ws, row: int, hdrs: list[str]) -> int:
     ws.row_dimensions[row].height = 24
     for c, h in enumerate(hdrs, 1):
@@ -59,6 +76,8 @@ def _headers(ws, row: int, hdrs: list[str]) -> int:
               bg=C_SUBHEADER, fg=C_HEADER_FG, align="center", border=_border())
     return row + 1
 
+
+# ── Sheet 1 — TDS Register ───────────────────────────────────────────────────
 def _write_register(wb, reg: TDSRegister) -> None:
     ws = wb.create_sheet("TDS Register")
     ws.sheet_view.showGridLines = False
@@ -100,6 +119,8 @@ def _write_register(wb, reg: TDSRegister) -> None:
     _cell(ws, r, 7, reg.total_gross_amount, bold=True, size=9, bg=C_TOTAL_BG, num_fmt=INR, align="right", border=_border())
     _cell(ws, r, 10, reg.total_tds_deducted, bold=True, size=9, bg=C_TOTAL_BG, num_fmt=INR, align="right", border=_border())
 
+
+# ── Sheet 2 — Section Summary ────────────────────────────────────────────────
 def _write_section_summary(wb, reg: TDSRegister) -> None:
     ws = wb.create_sheet("Section Summary")
     ws.sheet_view.showGridLines = False
@@ -123,6 +144,8 @@ def _write_section_summary(wb, reg: TDSRegister) -> None:
             _cell(ws, r, c, v, size=9, align=align, num_fmt=fmt, bg=alt, border=_border())
         r += 1
 
+
+# ── Sheet 3 — Deductee Summary ───────────────────────────────────────────────
 def _write_deductee_summary(wb, reg: TDSRegister) -> None:
     ws = wb.create_sheet("Deductee Summary")
     ws.sheet_view.showGridLines = False
@@ -148,6 +171,12 @@ def _write_deductee_summary(wb, reg: TDSRegister) -> None:
 
 
 def write_tds_xlsx(reg: TDSRegister, output_path: Path | str) -> None:
+    """
+    Write a TDS Register workbook (Register / Section Summary / Deductee
+    Summary sheets) from a TDSRegister — the same object TDSEngine.get_register()
+    produces, or service.rebuild_ledger_data.rebuild_tds_register() when
+    reconstructing from the DB.
+    """
     path = Path(output_path)
     wb   = openpyxl.Workbook()
     wb.remove(wb.active)

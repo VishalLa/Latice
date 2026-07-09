@@ -9,12 +9,13 @@ from werkzeug.utils import secure_filename
 from database.session import get_session
 from database.ledger_tax_models import GSTR1RecordModel
 from service import write_gstr1_xlsx
-from ._scoping import current_user, scope_owner_id
+from api._scoping import current_user, scope_owner_id
 from tasks.bill_pipeline_task import generate_gstr1_task
 
 app = Blueprint("gstr1_api", __name__)
 
 EXPORT_DIR = tempfile.gettempdir()
+
 
 def _rebuild_gstr1_dict(session, owner_id, period_label) -> dict | None:
     q = session.query(GSTR1RecordModel).filter(GSTR1RecordModel.period_label == period_label)
@@ -44,9 +45,18 @@ def _rebuild_gstr1_dict(session, owner_id, period_label) -> dict | None:
         "warnings": [],
     }
 
+
 @app.route("/<period_label>/generate", methods=["POST"])
 @jwt_required()
 def generate_gstr1(period_label: str):
+    """
+    POST /api/gstr1/<period_label>/generate
+    Body: {"period_start": "YYYY-MM-DD", "period_end": "YYYY-MM-DD", "user_id": "..." (admin only)}
+
+    Rebuilds GSTR-1 from every processed, output-direction bill in that
+    date range. Async — poll Celery via the returned task_id, same
+    pattern as /api/run_status/<run_id> for bank reconciliation.
+    """
     with get_session() as session:
         user = current_user(session)
         body = request.get_json(silent=True) or {}
@@ -68,6 +78,7 @@ def generate_gstr1(period_label: str):
             "status_url": f"/api/gstr1/task_status/{task.id}",
         }), 202
 
+
 @app.route("/task_status/<task_id>", methods=["GET"])
 @jwt_required()
 def gstr1_task_status(task_id: str):
@@ -81,6 +92,7 @@ def gstr1_task_status(task_id: str):
     elif task.state == "FAILURE":
         payload["error"] = str(task.result)
     return jsonify(payload), 200
+
 
 @app.route("/<period_label>", methods=["GET"])
 @jwt_required()
@@ -97,9 +109,11 @@ def get_gstr1(period_label: str):
             return jsonify({"error": f"No GSTR-1 data found for period {period_label!r}. Generate it first."}), 404
         return jsonify(result), 200
 
+
 @app.route("/<period_label>/export", methods=["GET"])
 @jwt_required()
 def export_gstr1(period_label: str):
+    """GET /api/gstr1/<period_label>/export[?user_id=...] -> .xlsx download"""
     with get_session() as session:
         user = current_user(session)
         owner_id, err = scope_owner_id(user, request.args.get("user_id"))

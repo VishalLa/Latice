@@ -21,7 +21,7 @@ def _report_filename(run_id: str) -> str:
 
 
 def _report_path(run_id: str) -> str:
-    return os.path.join(settings.UPLOAD_FOLDER, _report_filename(run_id))
+    return os.path.join(settings.STORAGE_DIR, _report_filename(run_id))
 
 
 def _collect_all_matches(result: dict) -> list:

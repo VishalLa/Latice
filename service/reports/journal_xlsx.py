@@ -1,3 +1,14 @@
+"""
+Journal Book Export to XLSX
+
+Writes all JournalEntry objects produced by build_ledger() / to_journal_entries()
+into a formatted Excel workbook.
+
+Sheets produced:
+  1. Journal Book  — complete audit trail, one row per entry-line
+  2. Summary       — entry count & totals grouped by voucher type
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -10,6 +21,7 @@ from openpyxl.utils import get_column_letter
 
 from schema import DrCr, JournalEntry
 
+# ── Colour palette (matches excel.py / Reports.py) ──────────────────────────
 C_HEADER_BG  = "1E3A5F"
 C_HEADER_FG  = "FFFFFF"
 C_SUBHEADER  = "2E6DA4"
@@ -24,14 +36,19 @@ C_CREDIT_BG  = "E0F0FF"
 
 INR = "\u20b9#,##0.00"
 
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
 def _border(style="thin", color=C_BORDER):
     s = Side(style=style, color=color)
     return Border(left=s, right=s, top=s, bottom=s)
+
 
 def _thick_bottom():
     t = Side(style="thin",   color=C_BORDER)
     m = Side(style="medium", color="000000")
     return Border(left=t, right=t, top=t, bottom=m)
+
 
 def _cell(ws, row, col, value=None, *, bold=False, size=9, bg=None,
           fg="000000", align="left", num_fmt=None, italic=False,
@@ -47,6 +64,7 @@ def _cell(ws, row, col, value=None, *, bold=False, size=9, bg=None,
         c.border = border
     return c
 
+
 def _title(ws, row: int, text: str, n_cols: int, subtitle: str = "") -> int:
     ws.row_dimensions[row].height = 32
     ws.merge_cells(f"A{row}:{get_column_letter(n_cols)}{row}")
@@ -60,6 +78,9 @@ def _title(ws, row: int, text: str, n_cols: int, subtitle: str = "") -> int:
               bg=C_SUBHEADER, fg=C_HEADER_FG, align="center", italic=True)
         row += 1
     return row + 1          # blank gap row
+
+
+# ── Sheet 1 — Journal Book ───────────────────────────────────────────────────
 
 def _write_journal_book(wb: openpyxl.Workbook, entries: list[JournalEntry]) -> None:
     ws = wb.create_sheet("Journal Book")
@@ -122,11 +143,13 @@ def _write_journal_book(wb: openpyxl.Workbook, entries: list[JournalEntry]) -> N
                   bg=alt or C_CREDIT_BG, border=_border())
             r += 1
 
+        # Entry sub-total separator
         ws.row_dimensions[r].height = 4
         ws.merge_cells(f"A{r}:H{r}")
         _cell(ws, r, 1, "", bg=C_SECTION_BG)
         r += 1
 
+    # Grand total
     ws.row_dimensions[r].height = 24
     ws.merge_cells(f"A{r}:F{r}")
     _cell(ws, r, 1, "GRAND TOTAL", bold=True, size=11,
@@ -137,6 +160,9 @@ def _write_journal_book(wb: openpyxl.Workbook, entries: list[JournalEntry]) -> N
     _cell(ws, r, 8, grand_cr, bold=True, size=11,
           bg=C_GRAND_BG, fg=C_GRAND_FG, align="right",
           num_fmt=INR, border=_thick_bottom())
+
+
+# ── Sheet 2 — Summary ────────────────────────────────────────────────────────
 
 def _write_summary(wb: openpyxl.Workbook, entries: list[JournalEntry]) -> None:
     ws = wb.create_sheet("Summary")
@@ -196,10 +222,20 @@ def _write_summary(wb: openpyxl.Workbook, entries: list[JournalEntry]) -> None:
           bg=C_GRAND_BG, fg=C_GRAND_FG, align="right",
           num_fmt=INR, border=_thick_bottom())
 
+
+# ── Public API ───────────────────────────────────────────────────────────────
+
 def write_journal_xlsx(
     entries:     list[JournalEntry],
     output_path: Path | str,
 ) -> None:
+    """
+    Write all journal entries to an Excel workbook.
+
+    Args:
+        entries     : list[JournalEntry] — from build_ledger() or to_journal_entries()
+        output_path : where to save the .xlsx file
+    """
     path = Path(output_path)
     wb   = openpyxl.Workbook()
     wb.remove(wb.active)

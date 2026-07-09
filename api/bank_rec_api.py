@@ -1,11 +1,11 @@
 import os
 import uuid
+import tempfile
 from flask import Blueprint, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 from celery.result import AsyncResult
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
-from core.config import settings
 from app.celery import app as celery_app
 from tasks.bank_rec_task import (
     run_reconciliation_pipeline,
@@ -19,17 +19,20 @@ from service.reconciliation_journal_posting import approve_journal_entries
 
 app = Blueprint("file_handler", __name__)
 
+
 ALLOWED_EXTENSIONS = {'csv', 'xlsx'}
-UPLOAD_FOLDER = settings.STORAGE_DIR
+UPLOAD_FOLDER = tempfile.gettempdir()
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 
 def allowed_file(filename: str):
     """Check if the uploaded file has an allowed extension."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+
 @app.route("/run_reconciliation", methods=["POST"])
 def upload_and_run():
-    print("CHECKPOINT 1: Endpoint hit!")
+    print("📍 CHECKPOINT 1: Endpoint hit!")
     if 'ledger_file' not in request.files or 'bank_file' not in request.files:
         return jsonify({"error": "Both ledger_file and bank_file are required"}), 400
 
@@ -50,19 +53,19 @@ def upload_and_run():
         ledger_path = os.path.join(UPLOAD_FOLDER, ledger_name)
         bank_path = os.path.join(UPLOAD_FOLDER, bank_name)
 
-        print(f"CHECKPOINT 2: Saving files to {UPLOAD_FOLDER} for Celery to read")
+        print(f"📍 CHECKPOINT 2: Saving files to {UPLOAD_FOLDER} for Celery to read")
         ledger_file.save(ledger_path)
         bank_file.save(bank_path)
 
         run_id = str(uuid.uuid4())
 
-        print(f"CHECKPOINT 3: Handing off to Celery, run_id={run_id}...")
+        print(f"📍 CHECKPOINT 3: Handing off to Celery, run_id={run_id}...")
         run_reconciliation_pipeline.apply_async(
             args=[ledger_path, bank_path],
             task_id=run_id,
         )
 
-        print(f"CHECKPOINT 4: Task {run_id} dispatched! Returning 202 to client.")
+        print(f"📍 CHECKPOINT 4: Task {run_id} dispatched! Returning 202 to client.")
         return jsonify({
             "message": "Reconciliation pipeline started successfully!",
             "run_id": run_id,
@@ -74,8 +77,16 @@ def upload_and_run():
         print(f"Error during file upload: {e}")
         return jsonify({"error": "Server Error processing files"}), 500
 
+
 @app.route("/run_status/<run_id>", methods=["GET"])
 def run_status(run_id: str):
+    """
+    Poll this from the frontend right after upload. Once state == SUCCESS,
+    `result` contains everything needed to redirect to a results window
+    (reconciliation_data / summary) and to download the report
+    (download_url), without any further DB lookup — it's read straight off
+    the Celery result backend, keyed by run_id (== task_id).
+    """
     task = AsyncResult(run_id, app=celery_app)
 
     payload = {
@@ -90,8 +101,15 @@ def run_status(run_id: str):
 
     return jsonify(payload), 200
 
+
 @app.route("/run_result/<run_id>", methods=["GET"])
 def run_result(run_id: str):
+    """
+    Dedicated endpoint for the frontend's "separate results window" —
+    returns just the reconciliation JSON (summary + matches + unreconciled
+    items) once the run has finished. Returns 202 while still running so
+    the frontend can keep polling the same URL.
+    """
     task = AsyncResult(run_id, app=celery_app)
 
     if task.state == "PENDING":
@@ -114,14 +132,24 @@ def run_result(run_id: str):
         "download_url": result.get("download_url"),
     }), 200
 
+
 @app.route('/download_report/run/<run_id>', methods=['GET'])
 def download_report_by_run(run_id: str):
+    """
+    Download the report for a specific run. Works immediately after the
+    run finishes (file was written synchronously by
+    run_reconciliation_pipeline), and later too as long as the report
+    file is still on local disk. If it's gone (e.g. temp dir was cleared),
+    falls back to regenerating it from the database.
+    """
     safe_run_id = secure_filename(run_id)
     path = _report_path(safe_run_id)
 
     if os.path.exists(path):
         return send_file(path, as_attachment=True, download_name=_report_filename(safe_run_id))
 
+    # Fall back: try to regenerate from the DB. Requires the caller to be
+    # authorized for this run — plug in your real auth/user_id lookup here.
     user_id = request.args.get("user_id", type=str)
     if user_id is None:
         return jsonify({
@@ -145,8 +173,10 @@ def download_report_by_run(run_id: str):
         download_name=_report_filename(safe_run_id)
     )
 
+
 @app.route('/download_report/<filename>', methods=['GET'])
 def download_report(filename: str):
+    """Legacy filename-based download — kept for backward compatibility."""
     safe_name = secure_filename(filename)
     path = os.path.join(UPLOAD_FOLDER, safe_name)
 
@@ -154,8 +184,10 @@ def download_report(filename: str):
         return jsonify({"error": "Report not found"}), 404
     return send_file(path, as_attachment=True)
 
+
 @app.route('/generate_report/run/<run_id>', methods=['POST'])
 def generate_report_run(run_id: str):
+    """Trigger (async) database-backed report regeneration for a run."""
     try:
         user_id = request.json.get('user_id') if request.is_json else None
         task = generate_report_from_db.delay(run_id, user_id=user_id)
@@ -163,9 +195,21 @@ def generate_report_run(run_id: str):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route('/run/<run_id>/approve_journal_entries', methods=['POST'])
 @jwt_required()
 def approve_journal_entries_route(run_id: str):
+    """
+    POST /api/run/<run_id>/approve_journal_entries
+    Body: {"entries": [{...draft from SUGGESTED_JOURNAL_ENTRIES, "status": "APPROVED"|"MODIFIED"|"REJECTED", ...}]}
+
+    Posts each APPROVED/MODIFIED draft as a real journal entry into the
+    same JournalEntryModel/JournalLineModel tables the bill-scanning
+    pipeline uses (so it shows up in /api/journal and
+    /api/ledger/trial-balance immediately). Nothing here is ever posted
+    without this explicit human approval step — drafts sit as
+    "pending_review" until this is called.
+    """
     body = request.get_json(silent=True) or {}
     entries = body.get("entries")
     if not entries or not isinstance(entries, list):

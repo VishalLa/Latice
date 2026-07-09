@@ -10,7 +10,7 @@ from database.session import get_session
 from database.ledger_tax_models import JournalEntryModel
 from service.rebuild_ledger_data import rebuild_journal_entries
 from service import write_ledger_xlsx
-from ._scoping import current_user, scope_owner_id
+from api._scoping import current_user, scope_owner_id
 
 from ledger import build_ledger
 from ledger.ledger import trial_balance
@@ -18,6 +18,7 @@ from ledger.ledger import trial_balance
 app = Blueprint("ledger_api", __name__)
 
 EXPORT_DIR = tempfile.gettempdir()
+
 
 def _parse_date(val, fallback):
     if not val:
@@ -27,7 +28,9 @@ def _parse_date(val, fallback):
     except ValueError:
         return fallback
 
+
 def _load_general_ledger(session, owner_id, as_on):
+    """Every JournalEntry up to `as_on`, scoped to owner_id (None = all users, admin-only)."""
     q = session.query(JournalEntryModel).filter(JournalEntryModel.date <= as_on)
     if owner_id is not None:
         q = q.filter(JournalEntryModel.user_id == owner_id)
@@ -36,9 +39,11 @@ def _load_general_ledger(session, owner_id, as_on):
     gl, all_entries, _closing = build_ledger([], _prebuilt_entries=entries)
     return gl, entries
 
+
 @app.route("/trial-balance", methods=["GET"])
 @jwt_required()
 def get_trial_balance():
+    """GET /api/ledger/trial-balance?as_on=YYYY-MM-DD[&user_id=...]"""
     with get_session() as session:
         user = current_user(session)
         owner_id, err = scope_owner_id(user, request.args.get("user_id"))
@@ -57,9 +62,12 @@ def get_trial_balance():
             payload["scope"] = "all_users"
         return jsonify(payload), 200
 
+
 @app.route("/export", methods=["GET"])
 @jwt_required()
 def export_ledger():
+    """GET /api/ledger/export?as_on=YYYY-MM-DD[&user_id=...] -> .xlsx download
+    (Trial Balance + Ledger Accounts + Cash Book sheets)"""
     with get_session() as session:
         user = current_user(session)
         owner_id, err = scope_owner_id(user, request.args.get("user_id"))

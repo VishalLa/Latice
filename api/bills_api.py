@@ -23,9 +23,20 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 def _allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
+
 @app.route("/upload", methods=["POST"])
 @jwt_required()
 def upload_bill():
+    """
+    POST /api/bills/upload
+    multipart/form-data:
+      - file: bill image/PDF (optional if raw_data is supplied)
+      - direction: "input" | "output" (default "input")
+      - raw_data: optional JSON string of an already-extracted bill dict
+                  (skips OCR entirely — useful for testing / non-image sources)
+
+    Creates a Bill row and kicks off process_bill_task asynchronously.
+    """
     with get_session() as session:
         user = current_user(session)
         if user is None:
@@ -73,9 +84,12 @@ def upload_bill():
             "status_url": f"/api/bills/{bill_id}/status",
         }), 202
 
+
 @app.route("/<bill_id>/status", methods=["GET"])
 @jwt_required()
 def bill_status(bill_id: str):
+    """Poll this after upload — combines the Celery task state with the
+    persisted Bill row (whichever finishes updating first)."""
     with get_session() as session:
         user = current_user(session)
         bill = session.query(BillModel).filter(BillModel.id == bill_id).first()
@@ -99,9 +113,11 @@ def bill_status(bill_id: str):
             "tds_applied": bool(journal_entry.tds_entries) if journal_entry else False,
         }), 200
 
-@app.route("/list_bills", methods=["GET"])
+
+@app.route("", methods=["GET"])
 @jwt_required()
 def list_bills():
+    """GET /api/bills?status=processed&direction=input[&user_id=...] (admin only for user_id)"""
     with get_session() as session:
         user = current_user(session)
         owner_id, err = scope_owner_id(user, request.args.get("user_id"))

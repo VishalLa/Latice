@@ -10,11 +10,12 @@ from database.session import get_session
 from database.ledger_tax_models import TDSEntryModel
 from service.rebuild_ledger_data import rebuild_tds_register
 from service import write_tds_xlsx
-from ._scoping import current_user, scope_owner_id
+from api._scoping import current_user, scope_owner_id
 
 app = Blueprint("tds_api", __name__)
 
 EXPORT_DIR = tempfile.gettempdir()
+
 
 def _parse_date(val, fallback):
     if not val:
@@ -24,9 +25,11 @@ def _parse_date(val, fallback):
     except ValueError:
         return fallback
 
+
 def _default_fy_bounds(today: date) -> tuple[date, date]:
     start_year = today.year if today.month >= 4 else today.year - 1
     return date(start_year, 4, 1), date(start_year + 1, 3, 31)
+
 
 def _load_register(session, owner_id, period_start, period_end):
     q = session.query(TDSEntryModel).filter(
@@ -38,9 +41,12 @@ def _load_register(session, owner_id, period_start, period_end):
     models = q.order_by(TDSEntryModel.date.asc()).all()
     return rebuild_tds_register(models, period_start, period_end)
 
+
 @app.route("", methods=["GET"])
 @jwt_required()
 def get_tds_register():
+    """GET /api/tds?period_start=YYYY-MM-DD&period_end=YYYY-MM-DD[&user_id=...]
+    Defaults to the current financial year (Apr-Mar) if no dates given."""
     with get_session() as session:
         user = current_user(session)
         owner_id, err = scope_owner_id(user, request.args.get("user_id"))
@@ -54,9 +60,11 @@ def get_tds_register():
         reg = _load_register(session, owner_id, period_start, period_end)
         return jsonify(reg.to_dict()), 200
 
+
 @app.route("/export", methods=["GET"])
 @jwt_required()
 def export_tds():
+    """GET /api/tds/export?period_start=...&period_end=...[&user_id=...] -> .xlsx download"""
     with get_session() as session:
         user = current_user(session)
         owner_id, err = scope_owner_id(user, request.args.get("user_id"))

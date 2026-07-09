@@ -1,53 +1,46 @@
 import os
 import uuid
-import tempfile
-from typing import Optional
-
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Body, Form, Depends
-from fastapi.responses import FileResponse, JSONResponse
-from starlette.concurrency import run_in_threadpool
+from flask import Blueprint, request, jsonify, send_file
 from werkzeug.utils import secure_filename
-from sqlalchemy.orm import Session
+from celery.result import AsyncResult
+from flask_jwt_extended import jwt_required, get_jwt_identity
 
-from database.session import get_session, get_db
-from database.user import User
-from database.bank_renc_model import ReconciliationRunModel
-from service import get_run_result
+from core.config import settings
+from app.celery import app as celery_app
 from tasks.bank_rec_task import (
     run_reconciliation_pipeline,
     generate_report_from_db,
     _report_filename,
     _report_path,
 )
+from database.session import get_session
+from database.bank_renc_model import ReconciliationRunModel
+from service.reconciliation_journal_posting import approve_journal_entries
 
-router = APIRouter()
+app = Blueprint("file_handler", __name__)
 
-
-ALLOWED_EXTENSIONS = {"csv", "xlsx"}
-UPLOAD_FOLDER = tempfile.gettempdir()
+ALLOWED_EXTENSIONS = {'csv', 'xlsx'}
+UPLOAD_FOLDER = settings.STORAGE_DIR
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-
-def allowed_file(filename: str) -> bool:
+def allowed_file(filename: str):
     """Check if the uploaded file has an allowed extension."""
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+@app.route("/run_reconciliation", methods=["POST"])
+def upload_and_run():
+    print("CHECKPOINT 1: Endpoint hit!")
+    if 'ledger_file' not in request.files or 'bank_file' not in request.files:
+        return jsonify({"error": "Both ledger_file and bank_file are required"}), 400
 
-@router.post("/run_reconciliation", status_code=202)
-async def upload_and_run(
-    ledger_file: UploadFile = File(...),
-    bank_file: UploadFile = File(...),
-    user_id: Optional[str] = Form(None),
-):
-    print("📍 CHECKPOINT 1: Endpoint hit!")
+    ledger_file = request.files['ledger_file']
+    bank_file = request.files['bank_file']
 
-    if not ledger_file.filename or not bank_file.filename:
-        raise HTTPException(status_code=400, detail="Both files must be selected")
+    if ledger_file.filename == '' or bank_file.filename == '':
+        return jsonify({"error": "Both files must be selected"}), 400
 
     if not (allowed_file(ledger_file.filename) and allowed_file(bank_file.filename)):
-        raise HTTPException(
-            status_code=400, detail="Invalid file type. Only CSV and XLSX are allowed."
-        )
+        return jsonify({"error": "Invalid file type. Only CSV and XLSX are allowed."}), 400
 
     try:
         unique_id = str(uuid.uuid4())[:8]
@@ -57,173 +50,139 @@ async def upload_and_run(
         ledger_path = os.path.join(UPLOAD_FOLDER, ledger_name)
         bank_path = os.path.join(UPLOAD_FOLDER, bank_name)
 
-        print(f"📍 CHECKPOINT 2: Saving files to {UPLOAD_FOLDER} for Celery to read")
-        ledger_bytes = await ledger_file.read()
-        bank_bytes = await bank_file.read()
-        with open(ledger_path, "wb") as f:
-            f.write(ledger_bytes)
-        with open(bank_path, "wb") as f:
-            f.write(bank_bytes)
+        print(f"CHECKPOINT 2: Saving files to {UPLOAD_FOLDER} for Celery to read")
+        ledger_file.save(ledger_path)
+        bank_file.save(bank_path)
 
         run_id = str(uuid.uuid4())
 
-        print(f"📍 CHECKPOINT 3: Handing off to Celery, run_id={run_id}...")
+        print(f"CHECKPOINT 3: Handing off to Celery, run_id={run_id}...")
         run_reconciliation_pipeline.apply_async(
-            args=[ledger_path, bank_path, user_id],
+            args=[ledger_path, bank_path],
             task_id=run_id,
         )
 
-        print(f"📍 CHECKPOINT 4: Task {run_id} dispatched! Returning 202 to client.")
-        return JSONResponse(
-            status_code=202,
-            content={
-                "message": "Reconciliation pipeline started successfully!",
-                "run_id": run_id,
-                "task_id": run_id,
-                "status_url": f"/run_status/{run_id}",
-            },
-        )
+        print(f"CHECKPOINT 4: Task {run_id} dispatched! Returning 202 to client.")
+        return jsonify({
+            "message": "Reconciliation pipeline started successfully!",
+            "run_id": run_id,
+            "task_id": run_id,
+            "status_url": f"/run_status/{run_id}",
+        }), 202
 
-    except HTTPException:
-        raise
     except Exception as e:
         print(f"Error during file upload: {e}")
-        raise HTTPException(status_code=500, detail="Server Error processing files")
+        return jsonify({"error": "Server Error processing files"}), 500
 
+@app.route("/run_status/<run_id>", methods=["GET"])
+def run_status(run_id: str):
+    task = AsyncResult(run_id, app=celery_app)
 
-def _get_run_result_sync(run_id: str, user_id: Optional[str]) -> dict:
-    """Blocking DB read — no Celery anywhere in this call. Executed in a
-    threadpool since the underlying SQLAlchemy session is synchronous."""
-    with get_session() as session:
-        return get_run_result(session, run_id, user_id)
+    payload = {
+        "run_id": run_id,
+        "state": task.state,   # PENDING | STARTED | RETRY | SUCCESS | FAILURE
+    }
 
-        
-@router.get("/get/previous-runs/{user_id}")
-def get_previous_runs(user_id: str, session: Session = Depends(get_db)):
-    try:
-        user = session.query(User).filter_by(id=user_id).first()
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail="No user found"
-            )
+    if task.state == "SUCCESS":
+        payload["result"] = task.result
+    elif task.state == "FAILURE":
+        payload["error"] = str(task.result)
 
-        runs = (
-            session.query(ReconciliationRunModel)
-            .filter_by(user_id=user_id)
-            .order_by(ReconciliationRunModel.run_at.desc())
-            .all()
-        )
+    return jsonify(payload), 200
 
-        return {
-            "user_id": user_id,
-            "runs": [
-                {
-                    "run_id": run.celery_task_id or str(run.id),
-                    "status": run.status,
-                    "bank_name": run.bank_name,
-                    "template_version": run.template_version,
-                    "run_at": run.run_at.isoformat() if run.run_at else None,
-                    "ledger_records": run.ledger_records,
-                    "bank_records": run.bank_records,
-                    "exact_matches": run.exact_matches,
-                    "fuzzy_matches": run.fuzzy_matches,
-                    "ai_matches": run.ai_matches,
-                    "unreconciled_ledger": run.unreconciled_ledger,
-                    "unreconciled_bank": run.unreconciled_bank,
-                }
-                for run in runs
-            ],
-        }
+@app.route("/run_result/<run_id>", methods=["GET"])
+def run_result(run_id: str):
+    task = AsyncResult(run_id, app=celery_app)
 
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail="Network Error"
-        )
+    if task.state == "PENDING":
+        return jsonify({"run_id": run_id, "state": task.state,
+                         "message": "Unknown run_id or not started yet."}), 202
+    if task.state in ("STARTED", "RETRY"):
+        return jsonify({"run_id": run_id, "state": task.state,
+                         "message": "Still processing."}), 202
+    if task.state == "FAILURE":
+        return jsonify({"run_id": run_id, "state": task.state,
+                         "error": str(task.result)}), 500
 
+    # SUCCESS
+    result = task.result or {}
+    return jsonify({
+        "run_id": run_id,
+        "state": task.state,
+        "summary": result.get("summary", {}),
+        "reconciliation_data": result.get("reconciliation_data", {}),
+        "download_url": result.get("download_url"),
+    }), 200
 
-@router.get("/previous-runs/{user_id}/{run_id}")
-async def get_previous_run_result(user_id: str, run_id: str):
-    """
-    Fetch one previous run's full result by its (public) run_id, scoped to
-    user_id — same shape as GET /run_result/{run_id}, just nested under the
-    previous-runs path so a "run history" list can link straight to a
-    result without the frontend having to know about the separate
-    run_result endpoint.
-    """
-    data = await run_in_threadpool(_get_run_result_sync, run_id, user_id)
-
-    if data["state"] == "FAILURE":
-        return JSONResponse(status_code=500, content=data)
-    if data["state"] != "SUCCESS":
-        return JSONResponse(status_code=202, content=data)
-    return data
-
-
-@router.post("/generate_report/run/{run_id}", status_code=202)
-async def generate_report_run(run_id: str, body: Optional[dict] = Body(None)):
-    """Trigger (async) database-backed report regeneration for a run."""
-    try: 
-        user_id = body.get("user_id") if body else None 
-        task = generate_report_from_db.delay(run_id, user_id=user_id)
-
-        return {
-            "message": "Report generation started",
-            "task_id": task.id
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-
-@router.get("/download_report/{filename}")
-async def download_report(filename: str):
-    """Legacy filename-based download — kept for backward compatibility."""
-    safe_name = secure_filename(filename)
-    path = os.path.join(UPLOAD_FOLDER, safe_name)
-
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Report not found")
-    return FileResponse(path, filename=safe_name)
-
-
-@router.get("/download_report/run/{run_id}")
-async def download_report_by_run(run_id: str, user_id: Optional[str] = Query(None)):
+@app.route('/download_report/run/<run_id>', methods=['GET'])
+def download_report_by_run(run_id: str):
     safe_run_id = secure_filename(run_id)
     path = _report_path(safe_run_id)
 
     if os.path.exists(path):
-        return FileResponse(
-            path,
-            filename=_report_filename(safe_run_id),
-            media_type="application/octet-stream",
-        )
-    
-    if user_id is None: 
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Report file not found on disk and no user_id supplied "
-                "to regenerate it from the database. Pass ?user_id=... "
-                "or re-run the reconciliation."
-            ),
-        )
-    
-    task = await run_in_threadpool(
-        lambda: generate_report_from_db.apply(args=[safe_run_id], kwargs={"user_id": user_id})
-    )
-    outcome = await run_in_threadpool(task.get) if hasattr(task, "get") else task
+        return send_file(path, as_attachment=True, download_name=_report_filename(safe_run_id))
+
+    user_id = request.args.get("user_id", type=str)
+    if user_id is None:
+        return jsonify({
+            "error": "Report file not found on disk and no user_id supplied "
+                     "to regenerate it from the database. Pass ?user_id=... "
+                     "or re-run the reconciliation."
+        }), 404
+
+    task = generate_report_from_db.apply(args=[safe_run_id], kwargs={"user_id": user_id})
+    outcome = task.get() if hasattr(task, "get") else task
 
     if not outcome or outcome.get("status") != "success":
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "Report not found and could not be regenerated.", "detail": outcome},
-        )
-    
-    return FileResponse(
-        outcome["path"],
-        filename=_report_filename(safe_run_id),
-        media_type="application/octet-stream",
+        return jsonify({
+            "error": "Report not found and could not be regenerated.",
+            "detail": outcome,
+        }), 404
+
+    return send_file(
+        outcome["path"], 
+        as_attachment=True,
+        download_name=_report_filename(safe_run_id)
     )
-    
+
+@app.route('/download_report/<filename>', methods=['GET'])
+def download_report(filename: str):
+    safe_name = secure_filename(filename)
+    path = os.path.join(UPLOAD_FOLDER, safe_name)
+
+    if not os.path.exists(path):
+        return jsonify({"error": "Report not found"}), 404
+    return send_file(path, as_attachment=True)
+
+@app.route('/generate_report/run/<run_id>', methods=['POST'])
+def generate_report_run(run_id: str):
+    try:
+        user_id = request.json.get('user_id') if request.is_json else None
+        task = generate_report_from_db.delay(run_id, user_id=user_id)
+        return jsonify({"message": "Report generation started", "task_id": task.id}), 202
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/run/<run_id>/approve_journal_entries', methods=['POST'])
+@jwt_required()
+def approve_journal_entries_route(run_id: str):
+    body = request.get_json(silent=True) or {}
+    entries = body.get("entries")
+    if not entries or not isinstance(entries, list):
+        return jsonify({"error": "Body must include a non-empty 'entries' list"}), 400
+
+    with get_session() as session:
+        current_user_id = get_jwt_identity()
+        run = session.query(ReconciliationRunModel).filter(
+            ReconciliationRunModel.celery_task_id == str(run_id)
+        ).first()
+        if run is None:
+            return jsonify({"error": f"No reconciliation run found for run_id={run_id!r}"}), 404
+
+        result = approve_journal_entries(
+            approved_entries=entries,
+            user_id=current_user_id,
+            db_session=session,
+            run_id=run.id,
+        )
+        return jsonify(result), 200

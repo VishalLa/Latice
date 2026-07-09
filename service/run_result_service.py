@@ -10,7 +10,6 @@ from database.bank_renc_model import (
     LedgerFormatModel,
     BankStatementModel,
 )
-from database.journal_model import JournalEntryModel
 from schema.bank_renc_schema import LedgerFormat as SchemaLedger, BankStatement as SchemaBank
 
 
@@ -120,62 +119,6 @@ def _build_matches(run: ReconciliationRunModel) -> List[Dict[str, Any]]:
         })
     return matches
 
-
-def _build_posted_journal_entries(run: ReconciliationRunModel) -> List[Dict[str, Any]]:
-    """
-    Journal entries actually posted for this run — distinct from the
-    still-draft SUGGESTED_JOURNAL_ENTRIES (which live as unposted
-    match_result rows until someone reviews and posts them via
-    PushEntryPointData.push_journal_entries). Uses the run_id backref
-    added on JournalEntryModel, so this is a single relationship walk,
-    not a fresh query.
-    """
-    entries: List[JournalEntryModel] = list(run.journal_entries or [])
-    entries.sort(key=lambda je: (je.entry_date, je.id))
-
-    out: List[Dict[str, Any]] = []
-    for je in entries:
-        lines = [
-            {
-                "account_name": ln.account_name,
-                "dr_cr": ln.dr_cr.value if hasattr(ln.dr_cr, "value") else ln.dr_cr,
-                "amount": ln.amount,
-                "narration": ln.narration,
-            }
-            for ln in je.lines
-        ]
-        out.append({
-            "id": je.id,
-            "entry_date": je.entry_date.isoformat() if je.entry_date else None,
-            "voucher_type": je.voucher_type,
-            "narration": je.narration,
-            "is_reconciliation_entry": je.is_reconciliation_entry,
-            "source_match_result_id": je.source_match_result_id,
-            "user_id": je.user_id,
-            "lines": lines,
-        })
-    return out
-
-
-def _build_suggested_journal_entries(matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    entries: List[Dict[str, Any]] = []
-    for m in matches:
-        if m.get("match_type") != "residual_draft":
-            continue
-        debit_account, credit_account = _parse_dr_cr_accounts(m.get("adjustment_type"))
-        parsed = _parse_draft_details(m.get("details"))
-        entries.append({
-            "bank_id": m.get("bank_id"),
-            "date": m.get("date"),
-            "amount": m.get("amount"),
-            "debit_account": debit_account,
-            "credit_account": credit_account,
-            "entry_narrative": parsed["entry_narrative"],
-            "confidence": parsed["confidence"] or m.get("confidence_score"),
-            "source": parsed["source"],
-            "status": parsed["status"] or "pending_review",
-        })
-    return entries
 
 
 def _split_match_ids(raw: Any) -> set[str]:
@@ -290,8 +233,6 @@ def fetch_run_bundle(
         "AI_MATCHES": [m for m in matches if m.get("match_type") in ("ai", "ai_queue")],
         "RESIDUAL_TIMING_MATCHES": [m for m in matches if m.get("match_type") == "residual_timing"],
         "RESIDUAL_SPLIT_MATCHES": [m for m in matches if m.get("match_type") == "residual_split"],
-        "SUGGESTED_JOURNAL_ENTRIES": _build_suggested_journal_entries(matches),
-        "POSTED_JOURNAL_ENTRIES": _build_posted_journal_entries(run),
         "UNRECONCILED_ITEMS": {
             "ledger": unreconciled_gl_objs,
             "bank": unreconciled_bank_objs,

@@ -12,3 +12,4 @@ wheels/
 myenv/
 
 *.env 
+test.*

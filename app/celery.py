@@ -21,6 +21,7 @@ app.conf.task_queues = (
     Queue('queue_preprocess'),
     Queue('queue_reconcile'),
     Queue('queue_postprocess'),
+    Queue('queue_bil_ledger'),
     Queue('celery'),  # default queue, used by get_data_from_db / generate_report_from_db
 )
 app.conf.task_default_queue = 'celery'

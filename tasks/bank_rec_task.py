@@ -6,21 +6,14 @@ from celery import chord
 
 from app.celery import app
 from database.session import get_session
-from service import PushEntryPointData
-from service import fetch_run_bundle, mark_run_status
+from service import PushBankRecData, fetch_run_bundle, mark_run_status
 from matcher import reconcile
 from entry_point.loader import load_bank_statement, load_ledger
 from schema.bank_renc_schema import LedgerFormat, BankStatement
-from sqlalchemy.orm import Session
 
 from matcher.test import print_reconciliation_results
 from service import write_bank_recon_xlsx
-
-
-QUEUE_DISPATCH = "queue_dispatch"        # run_reconciliation_pipeline (thin orchestrator)
-QUEUE_PREPROCESS = "queue_preprocess"    # process_pre_data
-QUEUE_RECONCILE = "queue_reconcile"      # run_matching
-QUEUE_POSTPROCESS = "queue_postprocess"  # finalize_reconciliation
+from core.config import settings
 
 
 def _report_filename(run_id: str) -> str:
@@ -28,7 +21,7 @@ def _report_filename(run_id: str) -> str:
 
 
 def _report_path(run_id: str) -> str:
-    return os.path.join(tempfile.gettempdir(), _report_filename(run_id))
+    return os.path.join(settings.UPLOAD_FOLDER, _report_filename(run_id))
 
 
 def _collect_all_matches(result: dict) -> list:
@@ -127,7 +120,7 @@ def _rehydrate_loader_payload(data: dict, record_cls) -> dict:
     return live
 
 
-@app.task(bind=True, max_retries=3, queue=QUEUE_PREPROCESS)
+@app.task(bind=True, max_retries=3, queue=settings.QUEUE_PREPROCESS)
 def process_pre_data(self, statements_data, ledgers_data, run_id=None):
     """
     STAGE 1a (parallel) — bulk-inserts the raw loaded CSV rows into the DB.
@@ -136,7 +129,7 @@ def process_pre_data(self, statements_data, ledgers_data, run_id=None):
     """
     try:
         with get_session() as session:
-            success = PushEntryPointData.push_all_data(
+            success = PushBankRecData.push_all_data(
                 session=session,
                 statements_data=statements_data,
                 ledgers_data=ledgers_data,
@@ -157,7 +150,7 @@ def process_pre_data(self, statements_data, ledgers_data, run_id=None):
         raise self.retry(exc=exc, countdown=5)
 
 
-@app.task(bind=True, max_retries=3, queue=QUEUE_RECONCILE)
+@app.task(bind=True, max_retries=3, queue=settings.QUEUE_RECONCILE)
 def run_matching(self, ledger_data, bank_data, all_warnings, run_db_id=None):
     """
     STAGE 1b (parallel) — runs the actual ledger<->bank matching. Only
@@ -193,7 +186,7 @@ def run_matching(self, ledger_data, bank_data, all_warnings, run_db_id=None):
         raise self.retry(exc=exc, countdown=5)
 
 
-@app.task(bind=True, max_retries=3, queue=QUEUE_POSTPROCESS)
+@app.task(bind=True, max_retries=3, queue=settings.QUEUE_POSTPROCESS)
 def finalize_reconciliation(
     self,
     parallel_results,
@@ -226,12 +219,18 @@ def finalize_reconciliation(
 
         all_matches = _collect_all_matches(result)
         matches_list = _serialize_for_celery(all_matches)
-        ignored_list = _serialize_for_celery(result.get("IGNORED_METADATA", []))
-        audit_list = _serialize_for_celery(result.get("AUDIT_INVESTIGATION", []))
+        ignored_list = [
+            {**item, "run_id": run_db_id}
+            for item in _serialize_for_celery(result.get("IGNORED_METADATA", []))
+        ]
+        audit_list = [
+            {**item, "run_id": run_db_id}
+            for item in _serialize_for_celery(result.get("AUDIT_INVESTIGATION", []))
+        ]
 
         with get_session() as session:
             # Writes MatchResultModel rows for the newer match categories.
-            PushEntryPointData.push_match_result_rows(
+            PushBankRecData.push_match_result_rows(
                 session,
                 run_id=run_db_id,
                 timing_matches=result.get("RESIDUAL_TIMING_MATCHES", []),
@@ -240,17 +239,16 @@ def finalize_reconciliation(
                 other_matches=all_matches,
             )
 
-            success = PushEntryPointData.push_reconciliation_results(
+            success = PushBankRecData.push_reconciliation_results(
                 session=session,
                 matches_data=[],
                 ignored_data=ignored_list,
                 audit_data=audit_list,
-                run_id=run_db_id,
             )
             if not success:
                 raise RuntimeError(f"push_reconciliation_results failed for run_id={run_db_id}")
 
-            PushEntryPointData.update_run_summary(session, run_db_id, result.get("summary", {}))
+            PushBankRecData.update_run_summary(session, run_db_id, result.get("summary", {}))
 
             marked = mark_run_status(session, run_db_id, "success")
             if not marked:
@@ -304,7 +302,7 @@ def finalize_reconciliation(
         raise self.retry(exc=exc, countdown=5)
 
 
-@app.task(bind=True, max_retries=3, queue=QUEUE_DISPATCH)
+@app.task(bind=True, max_retries=3, queue=settings.QUEUE_DISPATCH)
 def run_reconciliation_pipeline(self, ledger_path, bank_path, user_id=None):
     """
     Thin dispatcher only. Loads the files, creates the run row via
@@ -327,7 +325,7 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path, user_id=None):
         ledgers_list = _serialize_for_celery(gl_records)
 
         with get_session() as session:
-            db_run = PushEntryPointData.create_run(
+            db_run = PushBankRecData.create_run(
                 session,
                 celery_task_id=run_id,
                 bank_name=bank_data.get("bank_name"),
@@ -335,10 +333,12 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path, user_id=None):
                 ledger_source=ledger_data.get("source"),
                 bank_csv_path=bank_path,
                 ledger_csv_path=ledger_path,
-                user_id=user_id,
             )
             if db_run is None:
                 raise RuntimeError(f"create_run returned None for run_id={run_id}")
+            if user_id is not None:
+                db_run.user_id = user_id
+                session.commit()
             run_db_id = db_run.id
 
         all_warnings = ledger_data.get("warnings", []) + bank_data.get("warnings", [])

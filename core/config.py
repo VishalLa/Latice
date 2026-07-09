@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     SQLALCHEMY_SYNC_DATABASE_URI: Optional[str] = None
     SQLALCHEMY_ASYNC_DATABASE_URI: Optional[str] = None
 
+    STORAGE_DIR: str = os.environ.get(
+        "STORAGE_DIR",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage"),
+    )
+
+    # celery queue
+    QUEUE_DISPATCH: str = "queue_dispatch"        # run_reconciliation_pipeline
+    QUEUE_PREPROCESS: str = "queue_preprocess"    # process_pre_data
+    QUEUE_RECONCILE: str = "queue_reconcile"      # run_matching
+    QUEUE_POSTPROCESS: str = "queue_postprocess"  # finalize_reconciliation
+    QUEUE_BILL_LEDGER: str = "queue_bil_ledger"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,

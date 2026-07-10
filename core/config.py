@@ -10,6 +10,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _default_storage_dir() -> str:
+    if os.environ.get("STORAGE_DIR"):
+        return os.environ["STORAGE_DIR"]
+    if os.environ.get("BILL_UPLOAD_FOLDER"):
+        return os.environ["BILL_UPLOAD_FOLDER"]
+    if os.path.exists("/.dockerenv") or os.path.isdir("/data"):
+        return "/data/uploads"
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage")
+
+
+def _default_ollama_url() -> str:
+    host = "ollama" if os.path.exists("/.dockerenv") or os.path.isdir("/data") else "127.0.0.1"
+    return f"http://{host}:11434"
+
+
 class Settings(BaseSettings):
 
     DEBUG: bool = False
@@ -22,7 +38,7 @@ class Settings(BaseSettings):
     POSTGRES_DB: Optional[str] = None
 
     OLLAMA_NAME: str = "phi3:latest"
-    OLLAMA_URL: str= "http://0.0.0.0:11434"
+    OLLAMA_URL: str = os.environ.get("OLLAMA_URL", _default_ollama_url())
 
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
@@ -30,10 +46,8 @@ class Settings(BaseSettings):
     SQLALCHEMY_SYNC_DATABASE_URI: Optional[str] = None
     SQLALCHEMY_ASYNC_DATABASE_URI: Optional[str] = None
 
-    STORAGE_DIR: str = os.environ.get(
-        "STORAGE_DIR",
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage"),
-    )
+    BILL_UPLOAD_FOLDER: str = "/data/uploads"
+    STORAGE_DIR: str = _default_storage_dir()
 
     # celery queue
     QUEUE_DISPATCH: str = "queue_dispatch"        # run_reconciliation_pipeline
@@ -96,6 +110,15 @@ class Settings(BaseSettings):
         return None
 
     def model_post_init(self, __context):
+        os.makedirs(self.STORAGE_DIR, exist_ok=True)
+
+        if self.OLLAMA_URL:
+            parsed_ollama = urlparse(self.OLLAMA_URL)
+            if parsed_ollama.hostname == "0.0.0.0":
+                host = "ollama" if os.path.exists("/.dockerenv") or os.path.isdir("/data") else "127.0.0.1"
+                port = parsed_ollama.port or 11434
+                self.OLLAMA_URL = urlunparse(parsed_ollama._replace(netloc=f"{host}:{port}"))
+
         postgres_url = self._build_postgres_url()
         if postgres_url:
             self.SQLALCHEMY_SYNC_DATABASE_URI = postgres_url.replace(

@@ -1,19 +1,21 @@
+from typing import Optional
 import os
 import dataclasses
-import tempfile
-
-from celery import chord
-
+import uuid
 from app.celery import app
+from core.config import settings
 from database.session import get_session
-from service import PushBankRecData, fetch_run_bundle, mark_run_status
+from service import PushBankRecData
 from matcher import reconcile
 from entry_point.loader import load_bank_statement, load_ledger
-from schema.bank_renc_schema import LedgerFormat, BankStatement
+from sqlalchemy.orm import Session
 
-from matcher.test import print_reconciliation_results
+try:
+    from matcher.test import print_reconciliation_results
+except ModuleNotFoundError:
+    def print_reconciliation_results(results):
+        print("(matcher.test.print_reconciliation_results not available — skipping detailed console dump)")
 from service import write_bank_recon_xlsx
-from core.config import settings
 
 
 def _report_filename(run_id: str) -> str:
@@ -32,287 +34,74 @@ def _collect_all_matches(result: dict) -> list:
         result.get("AI_MATCHES", [])
     )
 
-
-def _serialize_for_celery(data_list):
-    if not data_list:
-        return []
-    if dataclasses.is_dataclass(data_list[0]):
-        return [dataclasses.asdict(item) for item in data_list]
-    elif hasattr(data_list[0], 'to_dict'):
-        return [item.to_dict() for item in data_list]
-    return data_list
-
-
-def _deep_serialize(obj):
-    if obj is None or isinstance(obj, (str, int, float, bool)):
-        return obj
-
-    if dataclasses.is_dataclass(obj):
-        return dataclasses.asdict(obj)
-
-    if hasattr(obj, "to_dict") and callable(getattr(obj, "to_dict")):
-        try:
-            return _deep_serialize(obj.to_dict())
-        except Exception:
-            pass
-
-    if isinstance(obj, dict):
-        return {k: _deep_serialize(v) for k, v in obj.items()}
-
-    if isinstance(obj, (list, tuple, set)):
-        return [_deep_serialize(i) for i in obj]
-
-    try:
-        attrs = getattr(obj, "__dict__", None)
-        if isinstance(attrs, dict):
-            return {k: _deep_serialize(v) for k, v in attrs.items() if not k.startswith("_")}
-    except Exception:
-        pass
-
-    return str(obj)
-
-
-def _serialize_loader_payload(data: dict) -> dict:
-    """
-    Make a load_ledger()/load_bank_statement() result JSON-safe so it can
-    cross the broker as a run_matching task argument — matching now runs in
-    a different worker process than the dispatcher, so it can't share
-    in-memory Python objects with it.
-    """
-    safe = dict(data)
-    if "records" in safe:
-        safe["records"] = _serialize_for_celery(safe["records"])
-    return safe
-
-
-def _rehydrate_records(records, record_cls):
-    """
-    Undo _serialize_for_celery(): turn the plain dicts that came back over
-    the Celery broker into real LedgerFormat/BankStatement instances again.
-
-    matcher.reconcile() (exact_matcher, fuzzy_matcher, ai_matcher,
-    residual_reconciler, ...) all use attribute access (e.g. `bank.debit`,
-    `gl.debit_amount`), not dict access. Without this step, records arrive
-    as plain dicts: getattr(dict, "debit_amount", 0.0) silently returns 0.0
-    instead of the real value (so early match phases can silently under-
-    match), and direct attribute access like `bank.debit` raises
-    AttributeError outright (the crash seen in ai_matcher.py).
-    """
-    if not records:
-        return records
-    valid_fields = {f.name for f in dataclasses.fields(record_cls)}
-    rehydrated = []
-    for r in records:
-        if isinstance(r, record_cls):
-            rehydrated.append(r)
-        elif isinstance(r, dict):
-            rehydrated.append(record_cls(**{k: v for k, v in r.items() if k in valid_fields}))
-        else:
-            rehydrated.append(r)
-    return rehydrated
-
-
-def _rehydrate_loader_payload(data: dict, record_cls) -> dict:
-    """Inverse of _serialize_loader_payload — used on the run_matching side."""
-    live = dict(data)
-    if "records" in live:
-        live["records"] = _rehydrate_records(live["records"], record_cls)
-    return live
-
-
-@app.task(bind=True, max_retries=3, queue=settings.QUEUE_PREPROCESS)
-def process_pre_data(self, statements_data, ledgers_data, run_id=None):
-    """
-    STAGE 1a (parallel) — bulk-inserts the raw loaded CSV rows into the DB.
-    Runs on its own worker (queue_preprocess), concurrently with
-    run_matching below.
-    """
+@app.task(bind=True, max_retries=3)
+def process_pre_data(self, statements_data, ledgers_data):
     try:
         with get_session() as session:
             success = PushBankRecData.push_all_data(
                 session=session,
                 statements_data=statements_data,
-                ledgers_data=ledgers_data,
-                run_id=run_id,
+                ledgers_data=ledgers_data
             )
-        if not success:
-            raise RuntimeError(f"push_all_data failed for run_id={run_id}")
-        return {"status": "success", "stage": "pre_data"}
+            return {"status": "success" if success else "failed"}
     except Exception as exc:
-        if self.request.retries >= self.max_retries:
-            try:
-                with get_session() as session:
-                    marked = mark_run_status(session, run_id, "failed", error_message=str(exc))
-                if not marked:
-                    print(f"⚠️  mark_run_status found no row for run_id={run_id} — status left stale.")
-            except Exception as mark_exc:
-                print(f"⚠️  Could not mark run_id={run_id} as failed: {mark_exc}")
         raise self.retry(exc=exc, countdown=5)
 
-
-@app.task(bind=True, max_retries=3, queue=settings.QUEUE_RECONCILE)
-def run_matching(self, ledger_data, bank_data, all_warnings, run_db_id=None):
-    """
-    STAGE 1b (parallel) — runs the actual ledger<->bank matching. Only
-    needs the in-memory loaded records (not anything process_pre_data
-    writes), so it's safe to run at the same time as pre-processing, on
-    its own worker (queue_reconcile).
-    """
+@app.task(bind=True, max_retries=3)
+def process_post_data(self, matches_data, ignored_data, audit_data):
     try:
-        ledger_data = _rehydrate_loader_payload(ledger_data, LedgerFormat)
-        bank_data = _rehydrate_loader_payload(bank_data, BankStatement)
-
-        result = reconcile(
-            ledger_result=ledger_data,
-            bank_result=bank_data,
-            all_warnings=all_warnings,
-        )
-
-        print("\n\n" + "=" * 50)
-        print(f"🎯 MATCHING COMPLETE for run_id={run_db_id}! PRINTING RESULTS:")
-        print_reconciliation_results(results=result)
-        print("=" * 50 + "\n\n")
-
-        return {"status": "success", "stage": "matching", "result": _deep_serialize(result)}
-    except Exception as exc:
-        if self.request.retries >= self.max_retries:
-            try:
-                with get_session() as session:
-                    marked = mark_run_status(session, run_db_id, "failed", error_message=str(exc))
-                if not marked:
-                    print(f"⚠️  mark_run_status found no row for run_id={run_db_id} — status left stale.")
-            except Exception as mark_exc:
-                print(f"⚠️  Could not mark run_id={run_db_id} as failed: {mark_exc}")
-        raise self.retry(exc=exc, countdown=5)
-
-
-@app.task(bind=True, max_retries=3, queue=settings.QUEUE_POSTPROCESS)
-def finalize_reconciliation(
-    self,
-    parallel_results,
-    run_db_id=None,
-    run_id=None,
-    ledger_path=None,
-    bank_path=None,
-):
-    """
-    STAGE 2 — the chord callback. Celery only invokes this once BOTH
-    process_pre_data and run_matching (the chord's header) have completed;
-    `parallel_results` is their return values, in header order:
-    [process_pre_data_result, run_matching_result].
-
-    This is the dedicated 3rd worker (queue_postprocess): pushes match
-    rows, ignored/audit rows, updates summary counters, generates the
-    report, and is the ONLY place that marks a run "success" — so if this
-    never runs, or fails, the run correctly stays out of "success" state
-    instead of the frontend being told everything's fine.
-    """
-    pre_result, match_result = parallel_results
-
-    try:
-        if pre_result.get("status") != "success":
-            raise RuntimeError(f"process_pre_data did not succeed for run_id={run_db_id}: {pre_result}")
-        if match_result.get("status") != "success":
-            raise RuntimeError(f"run_matching did not succeed for run_id={run_db_id}: {match_result}")
-
-        result = match_result["result"]
-
-        all_matches = _collect_all_matches(result)
-        matches_list = _serialize_for_celery(all_matches)
-        ignored_list = [
-            {**item, "run_id": run_db_id}
-            for item in _serialize_for_celery(result.get("IGNORED_METADATA", []))
-        ]
-        audit_list = [
-            {**item, "run_id": run_db_id}
-            for item in _serialize_for_celery(result.get("AUDIT_INVESTIGATION", []))
-        ]
-
         with get_session() as session:
-            # Writes MatchResultModel rows for the newer match categories.
-            PushBankRecData.push_match_result_rows(
-                session,
-                run_id=run_db_id,
-                timing_matches=result.get("RESIDUAL_TIMING_MATCHES", []),
-                split_matches=result.get("RESIDUAL_SPLIT_MATCHES", []),
-                suggested_journal_entries=result.get("SUGGESTED_JOURNAL_ENTRIES", []),
-                other_matches=all_matches,
-            )
-
             success = PushBankRecData.push_reconciliation_results(
                 session=session,
-                matches_data=[],
-                ignored_data=ignored_list,
-                audit_data=audit_list,
+                matches_data=matches_data,
+                ignored_data=ignored_data,
+                audit_data=audit_data
             )
-            if not success:
-                raise RuntimeError(f"push_reconciliation_results failed for run_id={run_db_id}")
-
-            PushBankRecData.update_run_summary(session, run_db_id, result.get("summary", {}))
-
-            marked = mark_run_status(session, run_db_id, "success")
-            if not marked:
-                raise RuntimeError(f"mark_run_status: no row found for run_id={run_db_id}")
-
-        report_name = _report_filename(run_id)
-        out_path = _report_path(run_id)
-        report_ready = False
-        try:
-            with get_session() as session:
-                bundle = fetch_run_bundle(session, run_id)
-            if bundle is not None:
-                recon_result, gl_objs, bank_objs = bundle
-                write_bank_recon_xlsx(recon_result, gl_objs, bank_objs, out_path)
-                report_ready = True
-            else:
-                report_name = None
-        except Exception as report_exc:
-            print(f"⚠️  Report generation failed for run_id={run_id}: {report_exc}")
-            report_name = None
-            report_ready = False
-
-        if ledger_path and os.path.exists(ledger_path):
-            os.remove(ledger_path)
-        if bank_path and os.path.exists(bank_path):
-            os.remove(bank_path)
-
-        return {
-            "status": "success",
-            "run_id": run_id,
-            "matches_found": len(matches_list),
-            "report_ready": report_ready,
-            "report_file": report_name,
-            "result_url": f"/run_result/{run_id}",
-            "download_url": f"/download_report/run/{run_id}" if report_ready else None,
-        }
-
+            return {"status": "success" if success else "failed"}
     except Exception as exc:
-        if self.request.retries >= self.max_retries:
-            try:
-                with get_session() as session:
-                    marked = mark_run_status(session, run_db_id, "failed", error_message=str(exc))
-                if not marked:
-                    print(f"⚠️  mark_run_status found no row for run_id={run_db_id} — status left stale.")
-            except Exception as mark_exc:
-                print(f"⚠️  Could not mark run_id={run_db_id} as failed: {mark_exc}")
-            if ledger_path and os.path.exists(ledger_path):
-                os.remove(ledger_path)
-            if bank_path and os.path.exists(bank_path):
-                os.remove(bank_path)
         raise self.retry(exc=exc, countdown=5)
 
-
-@app.task(bind=True, max_retries=3, queue=settings.QUEUE_DISPATCH)
-def run_reconciliation_pipeline(self, ledger_path, bank_path, user_id=None):
-    """
-    Thin dispatcher only. Loads the files, creates the run row via
-    create_run() (idempotent against celery_task_id's unique constraint),
-    then fans out pre-processing and matching to run CONCURRENTLY on two
-    separate workers via a Celery chord — finalize_reconciliation (a 3rd,
-    separate worker) fires only once both are done.
-    """
+@app.task(bind=True)
+def run_reconciliation_pipeline(self, ledger_path, bank_path):
     run_id = self.request.id
     print(f"DEBUG: Task received! run_id={run_id} Processing: {ledger_path}")
+
+    def _serialize_for_celery(data_list):
+        if not data_list:
+            return []
+        if dataclasses.is_dataclass(data_list[0]):
+            return [dataclasses.asdict(item) for item in data_list]
+        elif hasattr(data_list[0], 'to_dict'):
+            return [item.to_dict() for item in data_list]
+        return data_list
+
+    def _deep_serialize(obj):
+        if obj is None or isinstance(obj, (str, int, float, bool)):
+            return obj
+
+        if dataclasses.is_dataclass(obj):
+            return dataclasses.asdict(obj)
+
+        if hasattr(obj, "to_dict") and callable(getattr(obj, "to_dict")):
+            try:
+                return _deep_serialize(obj.to_dict())
+            except Exception:
+                pass
+
+        if isinstance(obj, dict):
+            return {k: _deep_serialize(v) for k, v in obj.items()}
+
+        if isinstance(obj, (list, tuple, set)):
+            return [_deep_serialize(i) for i in obj]
+
+        try:
+            attrs = getattr(obj, "__dict__", None)
+            if isinstance(attrs, dict):
+                return {k: _deep_serialize(v) for k, v in attrs.items() if not k.startswith("_")}
+        except Exception:
+            pass
+
+        return str(obj)
 
     try:
         ledger_data = load_ledger(filepath=ledger_path, date_format="%d-%m-%Y")
@@ -324,92 +113,231 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path, user_id=None):
         statements_list = _serialize_for_celery(bank_records)
         ledgers_list = _serialize_for_celery(gl_records)
 
-        with get_session() as session:
-            db_run = PushBankRecData.create_run(
-                session,
-                celery_task_id=run_id,
-                bank_name=bank_data.get("bank_name"),
-                template_version=bank_data.get("template_version"),
-                ledger_source=ledger_data.get("source"),
-                bank_csv_path=bank_path,
-                ledger_csv_path=ledger_path,
-            )
-            if db_run is None:
-                raise RuntimeError(f"create_run returned None for run_id={run_id}")
-            if user_id is not None:
-                db_run.user_id = user_id
-                session.commit()
-            run_db_id = db_run.id
+        db_run_id = None
+        try:
+            with get_session() as session:
+                run_row = PushBankRecData.create_run(
+                    session,
+                    celery_task_id=run_id,
+                    bank_name=bank_data.get("bank_name"),
+                    template_version=bank_data.get("template_version"),
+                    ledger_source=ledger_data.get("source"),
+                    bank_csv_path=bank_path,
+                    ledger_csv_path=ledger_path,
+                )
+                if run_row is not None:
+                    db_run_id = run_row.id
+                    persisted = PushBankRecData.push_all_data(
+                        session=session,
+                        statements_data=statements_list,
+                        ledgers_data=ledgers_list,
+                        run_id=db_run_id,
+                    )
+                    if not persisted:
+                        print(f"Ledger/bank persistence failed for run_id={run_id}; "
+                              f"match-result FK linkage will be unresolved for this run.")
+        except Exception as db_exc:
+            print(f"DB run creation/persistence failed for run_id={run_id}: {db_exc}")
 
         all_warnings = ledger_data.get("warnings", []) + bank_data.get("warnings", [])
-
-
-        ledger_payload = _serialize_loader_payload(ledger_data)
-        bank_payload = _serialize_loader_payload(bank_data)
-
-        header = [
-            process_pre_data.s(
-                statements_data=statements_list,
-                ledgers_data=ledgers_list,
-                run_id=run_db_id,
-            ),
-            run_matching.s(
-                ledger_data=ledger_payload,
-                bank_data=bank_payload,
-                all_warnings=all_warnings,
-                run_db_id=run_db_id,
-            ),
-        ]
-        callback = finalize_reconciliation.s(
-            run_db_id=run_db_id,
-            run_id=run_id,
-            ledger_path=ledger_path,
-            bank_path=bank_path,
+        result = reconcile(
+            ledger_result=ledger_data,
+            bank_result=bank_data,
+            all_warnings=all_warnings
         )
-        chord(header)(callback)
+
+        all_matches = _collect_all_matches(result)
+        matches_list = _serialize_for_celery(all_matches)
+        raw_ignored = result.get("IGNORED_METADATA", [])
+        for item in raw_ignored:
+            if "ledger_id" in item:
+                item["row_ref"] = item.pop("ledger_id")
+            elif "row_index" in item:
+                item["row_ref"] = str(item.pop("row_index"))
+
+        ignored_list = _serialize_for_celery(raw_ignored)
+        audit_list = _serialize_for_celery(result.get("AUDIT_INVESTIGATION", []))
+
+        print("\n\n" + "=" * 50)
+        print(f"CELERY WORKER: MATCHING COMPLETE for run_id={run_id}! PRINTING RESULTS:")
+        print_reconciliation_results(results=result)
+        print("=" * 50 + "\n\n")
+
+        if db_run_id is not None:
+            try:
+                with get_session() as session:
+                    PushBankRecData.push_match_result_rows(
+                        session,
+                        run_id=db_run_id,
+                        timing_matches=result.get("RESIDUAL_TIMING_MATCHES", []),
+                        split_matches=result.get("RESIDUAL_SPLIT_MATCHES", []),
+                        suggested_journal_entries=result.get("SUGGESTED_JOURNAL_ENTRIES", []),
+                        other_matches=all_matches,
+                    )
+                    PushBankRecData.update_run_summary(session, db_run_id, result.get("summary", {}))
+            except Exception as db_exc:
+                print(f"Match-result persistence failed for run_id={run_id}: {db_exc}")
+
+        report_name = _report_filename(run_id)
+        out_path = _report_path(run_id)
+        
+        try:
+            write_bank_recon_xlsx(result, gl_records, bank_records, out_path)
+            report_ready = True
+        except Exception as report_exc:
+            print(f"Report generation failed for run_id={run_id}: {report_exc}")
+            report_name = None
+            report_ready = False
+
+        if os.path.exists(ledger_path):
+            os.remove(ledger_path)
+        if os.path.exists(bank_path):
+            os.remove(bank_path)
+
+        safe_result = _deep_serialize(result)
 
         return {
-            "status": "dispatched",
+            "status": "success",
             "run_id": run_id,
+            "summary": safe_result.get("summary", {}),
+            "matches_found": len(matches_list),
+            "reconciliation_data": safe_result,
+            "report_ready": report_ready,
+            "report_file": report_name,
             "result_url": f"/run_result/{run_id}",
-            "download_url": f"/download_report/run/{run_id}",
+            "download_url": f"/download_report/run/{run_id}" if report_ready else None,
         }
 
     except Exception as e:
-        if self.request.retries >= self.max_retries:
-            try:
-                with get_session() as session:
-                    mark_run_status(session, run_id, "failed", error_message=str(e))
-            except Exception as mark_exc:
-                print(f"⚠️  Could not mark run_id={run_id} as failed: {mark_exc}")
-            if os.path.exists(ledger_path):
-                os.remove(ledger_path)
-            if os.path.exists(bank_path):
-                os.remove(bank_path)
+        if os.path.exists(ledger_path):
+            os.remove(ledger_path)
+        if os.path.exists(bank_path):
+            os.remove(bank_path)
         raise self.retry(exc=e, countdown=10)
 
 
+def _fetch_run_data(session: Session, user_id: Optional[str], run_id: str):
+    from database.bank_renc_model import (
+        ReconciliationRunModel,
+        LedgerFormatModel,
+        BankStatementModel,
+        MatchResultModel,
+    )
+    from schema.bank_renc_schema import LedgerFormat as SchemaLedger, BankStatement as SchemaBank
+
+    run = session.query(ReconciliationRunModel).filter(
+        ReconciliationRunModel.celery_task_id == str(run_id),
+    )
+    if user_id is not None:
+        run = run.filter(ReconciliationRunModel.user_id == str(user_id))
+
+    run = run.first()
+    if run is None:
+        return None
+
+    matches = []
+    for mr in run.match_results:
+        lid = mr.ledger_format.ledger_id if mr.ledger_format else None
+        bid = mr.bank_statement.row_index if mr.bank_statement else None
+        matches.append({
+            "id": mr.id,
+            "ledger_id": lid,
+            "bank_id": str(bid) if bid is not None else None,
+            "match_type": mr.match_type,
+            "adjustment_type": mr.adjustment_type,
+            "amount": mr.matched_amount,
+            "date": mr.matched_date.isoformat() if mr.matched_date else None,
+            "confidence_score": mr.confidence_score,
+            "details": mr.details,
+        })
+
+    gl_objs = []
+    ledger_q = session.query(LedgerFormatModel).filter(LedgerFormatModel.run_id == run.id)
+    for lr in ledger_q.all():
+        gl_objs.append(SchemaLedger(
+            account_name=lr.account_name or "",
+            ledger_id=lr.ledger_id,
+            account_number=lr.account_number,
+            transaction_date=lr.transaction_date.isoformat() if lr.transaction_date else None,
+            transaction_date_raw=lr.transaction_date_raw,
+            debit_amount=lr.debit_amount,
+            credit_amount=lr.credit_amount,
+            reference_id=lr.reference_id,
+            parse_warnings=lr.parse_warnings or [],
+            source=lr.source.value if hasattr(lr.source, 'value') else lr.source,
+            journal_entry_id=lr.journal_entry_id,
+            voucher_type=lr.voucher_type,
+            vendor_name=lr.vendor_name,
+            run_id=str(lr.run_id) if lr.run_id is not None else None,
+        ))
+
+    bank_objs = []
+    bank_q = session.query(BankStatementModel).filter(BankStatementModel.run_id == run.id)
+    for bs in bank_q.all():
+        bank_objs.append(SchemaBank(
+            row_index=bs.row_index,
+            bank_name=bs.bank_name or "",
+            template_version=bs.template_version or "",
+            date=bs.date.isoformat() if bs.date else None,
+            date_raw=bs.date_raw,
+            narration=bs.narration or "",
+            debit=bs.debit,
+            credit=bs.credit,
+            balance=bs.balance,
+            txn_id=bs.txn_id,
+            parse_warnings=bs.parse_warnings or [],
+            run_id=str(bs.run_id) if bs.run_id is not None else None,
+        ))
+
+    recon_result = {
+        "summary": {
+            "run_id": str(run.id),
+            "bank_name": run.bank_name,
+            "template_version": run.template_version,
+            "ledger_records": run.ledger_records,
+            "bank_records": run.bank_records,
+            "exact_matches": run.exact_matches,
+            "fuzzy_matches": run.fuzzy_matches,
+            "ai_matches": run.ai_matches,
+            "unreconciled_ledger": run.unreconciled_ledger,
+            "unreconciled_bank": run.unreconciled_bank,
+            "run_at": run.run_at.isoformat() if run.run_at else None,
+            "user_id": str(run.user_id) if run.user_id is not None else None,
+        },
+        "EXACT_MATCHES": [m for m in matches if m.get("match_type") == "exact"],
+        "FUZZY_MATCHES": [m for m in matches if m.get("match_type") == "fuzzy"],
+        "MEMORY_MATCHES": [m for m in matches if m.get("match_type") == "memory"],
+        "AI_MATCHES": [m for m in matches if m.get("match_type") in ("ai", "ai_queue")],
+        "UNRECONCILED_ITEMS": {
+            "ledger": gl_objs,
+            "bank": bank_objs,
+        },
+    }
+
+    return recon_result, gl_objs, bank_objs
+
+
 @app.task(bind=True)
-def get_data_from_db(self, user_id: int, run_id: str, filename: str = None):
+def get_data_from_db(self, user_id: Optional[str], run_id: str, filename: str = None):
     try:
         with get_session() as session:
-            bundle = fetch_run_bundle(session, run_id, user_id)
-            if bundle is None:
+            fetched = _fetch_run_data(session, user_id, run_id)
+            if fetched is None:
                 return {"status": "error", "message": "Reconciliation run not found or unauthorized."}
-            recon_result, _gl_objs, _bank_objs = bundle
+            recon_result, _gl_objs, _bank_objs = fetched
             return recon_result
     except Exception as exc:
         raise self.retry(exc=exc, countdown=10)
 
 
 @app.task(bind=True)
-def generate_report_from_db(self, run_id: str, user_id: int = None, filename: str = None):
+def generate_report_from_db(self, run_id: str, user_id: Optional[str] = None, filename: str = None):
     try:
         with get_session() as session:
-            bundle = fetch_run_bundle(session, run_id, user_id)
-            if bundle is None:
+            fetched = _fetch_run_data(session, user_id, run_id)
+            if fetched is None:
                 return {"status": "error", "message": "Reconciliation run not found or unauthorized."}
-            recon_result, gl_objs, bank_objs = bundle
+            recon_result, gl_objs, bank_objs = fetched
 
         out_path = _report_path(run_id)
         write_bank_recon_xlsx(recon_result, gl_objs, bank_objs, out_path)

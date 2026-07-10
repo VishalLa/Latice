@@ -5,23 +5,54 @@ services:
     image: postgres:15-alpine
     container_name: bank_rec_postgres
     restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: bank_reconciliation
+    env_file:
+      - .env
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - backend_network
-
+  
   redis_server:
     image: redis:7-alpine
     container_name: bank_rec_redis
     restart: always
     ports:
       - "6379:6379"
+    networks:
+      - backend_network
+  
+  backend:
+    build: .
+    container_name: bank_rec_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - bill_uploads:/data/uploads
+    env_file:
+      - .env
+    depends_on:
+      - postgres_db
+      - redis_server
+      - ollama
+    networks:
+      - backend_network
+
+  worker:
+    build: .
+    container_name: bank_rec_worker
+    command: celery -A app.celery worker --loglevel=info
+    volumes:
+      - .:/app
+      - bill_uploads:/data/uploads
+    env_file: 
+      - .env
+    depends_on:
+      - postgres_db
+      - redis_server
+      - ollama
     networks:
       - backend_network
 
@@ -39,55 +70,11 @@ services:
     networks:
       - backend_network
 
-  backend:
-    build: .
-    container_name: bank_rec_backend
-    ports:
-      - "8000:8000"
-    volumes:
-      - shared_uploads:/app/uploads
-    environment:
-      REDIS_URL: redis://redis_server:6379/0
-      DATABASE_URL: postgresql://postgres:postgres@postgres_db:5432/bank_reconciliation
-      POSTGRES_HOST: postgres_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: bank_reconciliation
-      OLLAMA_URL: http://ollama:11434
-      OLLAMA_NAME: phi3:latest
-    depends_on:
-      - postgres_db
-      - redis_server
-      - ollama
-    networks:
-      - backend_network
-
-  worker:
-    build: .
-    container_name: bank_rec_worker
-    command: celery -A app.celery worker --loglevel=info
-    environment:
-      REDIS_URL: redis://redis_server:6379/0
-      DATABASE_URL: postgresql://postgres:postgres@postgres_db:5432/bank_reconciliation
-      POSTGRES_HOST: postgres_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: bank_reconciliation
-      OLLAMA_URL: http://ollama:11434
-      OLLAMA_NAME: phi3:latest
-    volumes:
-      - shared_uploads:/app/uploads
-    depends_on:
-      - postgres_db
-      - redis_server
-      - ollama
-    networks:
-      - backend_network
-
 volumes:
   postgres_data:
   ollama_storage:
   shared_uploads:
+  bill_uploads:
 
 networks:
   backend_network:

@@ -15,13 +15,14 @@ from tasks.bank_rec_task import (
 )
 from database.session import get_session
 from database.bank_renc_model import ReconciliationRunModel
-from service.reconciliation_journal_posting import approve_journal_entries
+from service import approve_journal_entries
+from core.config import settings
 
 app = Blueprint("file_handler", __name__)
 
 
 ALLOWED_EXTENSIONS = {'csv', 'xlsx'}
-UPLOAD_FOLDER = tempfile.gettempdir()
+UPLOAD_FOLDER = settings.STORAGE_DIR
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 

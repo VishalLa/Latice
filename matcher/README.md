@@ -8,33 +8,33 @@ genuinely ambiguous items are left for a person to look at.
 
 ```
 GL Records + Bank Records
-        │
-        ▼
+           │
+           ▼
  ┌─────────────────────┐
  │ 0. Same-Side Detect │  (sanity check on debit/credit orientation)
  └─────────┬───────────┘
-        ▼
+           ▼
  ┌─────────────────────┐
  │ 1. Exact Match      │  date + amount + reference/UTR
  └─────────┬───────────┘
-        ▼
+           ▼
  ┌─────────────────────┐
  │ 2. Fuzzy Match      │  17 deterministic heuristics
  └─────────┬───────────┘
-        ▼
+           ▼
  ┌─────────────────────┐
  │ 3. Memory Match     │  previously recognized recurring patterns
  └─────────┬───────────┘
-        ▼
+           ▼
  ┌─────────────────────┐
  │ 4. AI Match         │  LLM semantic 1-to-1 and many-to-1 matching
  └─────────┬───────────┘
-        ▼
+           ▼
  ┌─────────────────────┐
  │ 5. Residual         │  classify, resolve wide-window timing/splits,
  │    Reconciliation   │  draft journal entries, build review queue
  └─────────┬───────────┘
-        ▼
+           ▼
    Final Reconciliation Report
 ```
 

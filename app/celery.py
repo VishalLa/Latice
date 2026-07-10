@@ -10,7 +10,8 @@ app = Celery(
     broker=os.environ.get("REDIS_URL"),  # where tasks are stored
     backend=os.environ.get("REDIS_URL"),  # where results are stored
     include=[
-        'tasks.bank_rec_task'
+        'tasks.bank_rec_task',
+        'tasks.bill_pipeline_task',
     ]
 )
 

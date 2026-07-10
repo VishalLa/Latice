@@ -1,23 +1,44 @@
 from __future__ import annotations
 
 import csv
+import re
 from typing import List, Optional, Tuple
 
 from schema import BankTemplate
 from schema.template import get_all_templates
 
 
+_HEADER_TOKEN_RE = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_header_name(value: object) -> str:
+    text = str(value or "").strip().lstrip("\ufeff").lower()
+    text = _HEADER_TOKEN_RE.sub(" ", text)
+    return " ".join(text.split())
+
+
+def normalized_header_set(columns: List[str]) -> set[str]:
+    return {normalize_header_name(c) for c in columns if normalize_header_name(c)}
+
+
 def _read_header_candidates(
-    filepath: str, 
-    encoding: str = "utf-8", 
+    filepath: str,
+    encoding: str = "utf-8",
     max_skip: int = 25
 ) -> List[Tuple[int, List[str]]]:
     
     candidates = []
 
-    try: 
+    try:
         with open(filepath, 'r', encoding=encoding, errors='replace', newline='') as file:
-            reader = csv.reader(file)
+            sample = file.read(4096)
+            file.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+            except csv.Error:
+                dialect = csv.excel
+
+            reader = csv.reader(file, dialect)
             for i, row in enumerate(reader):
                 if i > max_skip:
                     break
@@ -57,15 +78,16 @@ def detect_bank(
     best_fuzzy = None 
 
     for row_idx, cols in header_candidates:
-        header_set = set(cols)
+        header_set = normalized_header_set(cols)
         for tmpl in templates:
             if not tmpl.fingerprint:
                 continue
-            if tmpl.fingerprint.issubset(header_set):
+            fingerprint = {normalize_header_name(c) for c in tmpl.fingerprint}
+            if fingerprint.issubset(header_set):
                 exact_matches.append((row_idx, tmpl))
             else:
-                overlap = tmpl.fingerprint & header_set
-                score = len(overlap) / len(tmpl.fingerprint)
+                overlap = fingerprint & header_set
+                score = len(overlap) / len(fingerprint)
 
                 if best_fuzzy is None or score > best_fuzzy[0]:
                     best_fuzzy = (score, row_idx, tmpl)

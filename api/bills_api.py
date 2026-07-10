@@ -12,11 +12,12 @@ from database.ledger_tax_models import BillModel
 from ._scoping import current_user, scope_owner_id
 from app.celery import app as celery_app
 from tasks.bill_pipeline_task import process_bill_task
+from core.config import settings
 
 app = Blueprint("bills_api", __name__)
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "pdf"}
-UPLOAD_FOLDER = tempfile.gettempdir()
+UPLOAD_FOLDER = settings.STORAGE_DIR
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 

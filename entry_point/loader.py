@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from schema import LedgerFormat, LedgerSource, BankStatement, BankTemplate
-from .bank_processor import detect_bank
+from .bank_processor import detect_bank, normalize_header_name, normalized_header_set
 
 
 _AMOUNT_CLEAN_RE = re.compile(r"[^\d.\-]")
@@ -479,6 +479,66 @@ def _is_blank_row(raw_row: dict) -> bool:
     return True
 
 
+def _template_columns(template: BankTemplate) -> List[str]:
+    return [
+        c for c in [
+            template.date_column,
+            template.narration_column,
+            template.debit_column,
+            template.credit_column,
+            template.txn_id_column,
+            template.balance_column,
+            template.type_column,
+            template.amount_column,
+        ]
+        if c
+    ]
+
+
+def _column_lookup(fieldnames: List[str]) -> Dict[str, str]:
+    lookup: Dict[str, str] = {}
+    for name in fieldnames:
+        normalized = normalize_header_name(name)
+        if normalized and normalized not in lookup:
+            lookup[normalized] = name
+    return lookup
+
+
+def _missing_template_columns(template: BankTemplate, fieldnames: List[str]) -> List[str]:
+    lookup = _column_lookup(fieldnames)
+    return [
+        col for col in [template.date_column, template.narration_column]
+        if col and normalize_header_name(col) not in lookup
+    ]
+
+
+def _resolve_bank_row_columns(
+    row: Dict[str, Any],
+    template: BankTemplate,
+    fieldnames: List[str],
+) -> Dict[str, Any]:
+    resolved = dict(row)
+    lookup = _column_lookup(fieldnames)
+
+    for expected in _template_columns(template):
+        if expected in resolved:
+            continue
+        actual = lookup.get(normalize_header_name(expected))
+        if actual in row:
+            resolved[expected] = row.get(actual)
+
+    return resolved
+
+
+def _sniff_csv_dialect(fh):
+    sample = fh.read(4096)
+    fh.seek(0)
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except csv.Error:
+        return csv.excel
+
+
 # ---------------------------------------------------------------------------
 # Internal: build BankStatement from a resolved row dict
 # ---------------------------------------------------------------------------
@@ -619,8 +679,9 @@ def _load_bank_excel(
     # Locate header row
     detected_header = 0
     for idx in range(min(30, len(raw))):
-        cols_here = {str(v).strip() for v in raw.iloc[idx] if str(v).strip() != ""}
-        if template.fingerprint and template.fingerprint.issubset(cols_here):
+        cols_here = normalized_header_set([str(v) for v in raw.iloc[idx] if str(v).strip() != ""])
+        fingerprint = {normalize_header_name(c) for c in template.fingerprint}
+        if template.fingerprint and fingerprint.issubset(cols_here):
             detected_header = idx
             break
         if len(cols_here) >= 3 and detected_header == 0:
@@ -634,8 +695,7 @@ def _load_bank_excel(
     fieldnames  = list(df.columns)
     field_count = len(fieldnames)
 
-    required_cols = [template.date_column, template.narration_column]
-    missing = [c for c in required_cols if c not in fieldnames]
+    missing = _missing_template_columns(template, fieldnames)
     if missing:
         warnings.append(f"Missing expected column(s) in Excel sheet: {missing}")
 
@@ -647,6 +707,7 @@ def _load_bank_excel(
         if all(v is None or str(v).strip() == "" for v in row.values()):
             continue
 
+        row = _resolve_bank_row_columns(row, template, fieldnames)
         records.append(_build_bank_record(row, out_idx, template, field_count))
 
     return {
@@ -690,17 +751,18 @@ def _detect_bank_excel(
             continue
 
         for idx in range(min(30, len(raw))):
-            cols_here = {str(v).strip() for v in raw.iloc[idx] if str(v).strip() != ""}
+            cols_here = normalized_header_set([str(v) for v in raw.iloc[idx] if str(v).strip() != ""])
             if len(cols_here) < 2:
                 continue
             for tmpl in templates:
                 if not tmpl.fingerprint:
                     continue
-                if tmpl.fingerprint.issubset(cols_here):
+                fingerprint = {normalize_header_name(c) for c in tmpl.fingerprint}
+                if fingerprint.issubset(cols_here):
                     exact_matches.append((idx, tmpl))
                 else:
-                    overlap = tmpl.fingerprint & cols_here
-                    score = len(overlap) / len(tmpl.fingerprint)
+                    overlap = fingerprint & cols_here
+                    score = len(overlap) / len(fingerprint)
                     if best_fuzzy is None or score > best_fuzzy[0]:
                         best_fuzzy = (score, idx, tmpl)
 
@@ -804,10 +866,11 @@ def load_bank_statement(
 
     try:
         with open(filepath, "r", encoding=template.encoding, newline="") as fh:
+            dialect = _sniff_csv_dialect(fh)
             for _ in range(skip):
                 if fh.readline() == "":
                     break
-            reader = csv.DictReader(fh)
+            reader = csv.DictReader(fh, dialect=dialect)
             if not reader.fieldnames:
                 raise ValueError("No header row found at the expected position.")
             reader.fieldnames = [c.strip().lstrip("\ufeff") for c in reader.fieldnames]
@@ -822,8 +885,7 @@ def load_bank_statement(
             "warnings":         [f"Failed to parse bank CSV: {e}"],
         }
 
-    required_cols = [template.date_column, template.narration_column]
-    missing = [c for c in required_cols if c not in reader.fieldnames]
+    missing = _missing_template_columns(template, reader.fieldnames)
     if missing:
         warnings_csv.append(f"Missing expected column(s) after header detection: {missing}")
 
@@ -833,6 +895,7 @@ def load_bank_statement(
     for raw_row in raw_rows:
         if _is_blank_row(raw_row):
             continue
+        raw_row = _resolve_bank_row_columns(raw_row, template, reader.fieldnames)
         records_csv.append(_build_bank_record(raw_row, out_idx, template, field_count))
         out_idx += 1
 

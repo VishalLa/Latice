@@ -65,7 +65,7 @@ from .ledger import (
     creditors_ageing,
 )
 from .opening_balances import load_opening_balances
-from .journal import to_journal_entries, to_journal_entry
+from .journal import to_journal_entries, to_journal_entry, close_books
 from .tds import TDSEngine
 from .gstr1 import build_gstr1
 from schema import DeducteeType, Form26Q, JournalEntry

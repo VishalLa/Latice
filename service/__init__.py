@@ -2,6 +2,7 @@ from .store_bank_rec_data import PushBankRecData
 from .store_ledger_data import PushLedgerData, fy_label_for_date
 from .rebuild_ledger_data import rebuild_journal_entries, rebuild_journal_entry, rebuild_tds_entry, rebuild_tds_register
 from .reconciliation_journal_posting import approve_journal_entries
+from .period_close import close_period, PeriodAlreadyClosedError
 
 from .reports.bank_recon_xlsx import write_bank_recon_xlsx
 from .reports.gstr1_xlsx import write_gstr1_xlsx
@@ -22,6 +23,9 @@ __all__ = [
     "rebuild_tds_register",
 
     "approve_journal_entries",
+
+    "close_period",
+    "PeriodAlreadyClosedError",
 
     "write_bank_recon_xlsx",
     "write_gstr1_xlsx",

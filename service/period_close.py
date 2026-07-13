@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from schema import Account, AccountGroup, DrCr, EntryLine, JournalEntry
+from schema import AccountGroup, JournalEntry
 from database.ledger_tax_models import JournalEntryModel, JournalLineModel
 from database.period_model import FiscalPeriod, PeriodAccountBalance
 from .rebuild_ledger_data import rebuild_journal_entries
-from ledger import build_ledger, trial_balance, close_books
+from ledger import build_ledger, trial_balance
 
 # Accounts in these groups are nominal (P&L) accounts — their balances are
 # transferred to Trading A/c / Profit & Loss A/c on close and start the next

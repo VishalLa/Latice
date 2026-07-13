@@ -192,8 +192,8 @@ class FuzzyMatcher:
             self.gl_out: Callable[[LedgerFormat],  float] = lambda g: _safe_amount(g, "debit_amount")
             self.gl_in:  Callable[[LedgerFormat],  float] = lambda g: _safe_amount(g, "credit_amount")
         else:
-            self.gl_out = lambda g: _safe_amount(g, "credit_amount")
-            self.gl_in  = lambda g: _safe_amount(g, "debit_amount")
+            self.gl_out: Callable[[LedgerFormat],  float] = lambda g: _safe_amount(g, "credit_amount")
+            self.gl_in:  Callable[[LedgerFormat],  float]  = lambda g: _safe_amount(g, "debit_amount")
 
         self.bank_out: Callable[[BankStatement], float] = lambda b: _safe_amount(b, "debit")
         self.bank_in:  Callable[[BankStatement], float] = lambda b: _safe_amount(b, "credit")

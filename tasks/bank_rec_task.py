@@ -103,6 +103,12 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path):
 
         return str(obj)
 
+    def _cleanup_input_files():
+        if os.path.exists(ledger_path):
+            os.remove(ledger_path)
+        if os.path.exists(bank_path):
+            os.remove(bank_path)
+
     try:
         ledger_data = load_ledger(filepath=ledger_path, date_format="%d-%m-%Y")
         bank_data = load_bank_statement(filepath=bank_path)
@@ -148,8 +154,10 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path):
 
         all_matches = _collect_all_matches(result)
         matches_list = _serialize_for_celery(all_matches)
-        raw_ignored = result.get("IGNORED_METADATA", [])
+        raw_ignored = _deep_serialize(result.get("IGNORED_METADATA", []))
         for item in raw_ignored:
+            if not isinstance(item, dict):
+                continue
             if "ledger_id" in item:
                 item["row_ref"] = item.pop("ledger_id")
             elif "row_index" in item:
@@ -189,10 +197,7 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path):
             report_name = None
             report_ready = False
 
-        if os.path.exists(ledger_path):
-            os.remove(ledger_path)
-        if os.path.exists(bank_path):
-            os.remove(bank_path)
+        _cleanup_input_files()
 
         safe_result = _deep_serialize(result)
 
@@ -209,10 +214,9 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path):
         }
 
     except Exception as e:
-        if os.path.exists(ledger_path):
-            os.remove(ledger_path)
-        if os.path.exists(bank_path):
-            os.remove(bank_path)
+        max_retries = self.max_retries if self.max_retries is not None else 3
+        if self.request.retries >= max_retries:
+            _cleanup_input_files()
         raise self.retry(exc=e, countdown=10)
 
 

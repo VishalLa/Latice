@@ -26,6 +26,10 @@ def _default_ollama_url() -> str:
     return f"http://{host}:11434"
 
 
+def _is_container_runtime() -> bool:
+    return os.path.exists("/.dockerenv") or os.path.isdir("/data")
+
+
 class Settings(BaseSettings):
 
     DEBUG: bool = False
@@ -114,8 +118,9 @@ class Settings(BaseSettings):
 
         if self.OLLAMA_URL:
             parsed_ollama = urlparse(self.OLLAMA_URL)
-            if parsed_ollama.hostname == "0.0.0.0":
-                host = "ollama" if os.path.exists("/.dockerenv") or os.path.isdir("/data") else "127.0.0.1"
+            hostname = parsed_ollama.hostname
+            if hostname in {"0.0.0.0", "127.0.0.1", "localhost", "ollama_server", "ollama"}:
+                host = "ollama" if _is_container_runtime() else "127.0.0.1"
                 port = parsed_ollama.port or 11434
                 self.OLLAMA_URL = urlunparse(parsed_ollama._replace(netloc=f"{host}:{port}"))
 

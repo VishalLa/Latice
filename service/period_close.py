@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from schema import Account, AccountGroup, DrCr, EntryLine, JournalEntry
 from database.ledger_tax_models import JournalEntryModel, JournalLineModel
-from database.period_modal import FiscalPeriod, PeriodAccountBalance
+from database.period_model import FiscalPeriod, PeriodAccountBalance
 from .rebuild_ledger_data import rebuild_journal_entries
 from ledger import build_ledger, trial_balance, close_books
 

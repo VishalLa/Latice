@@ -8,7 +8,7 @@ from werkzeug.utils import secure_filename
 
 from database.session import get_session
 from database.ledger_tax_models import JournalEntryModel
-from database.period_modal import FiscalPeriod
+from database.period_model import FiscalPeriod
 from service.rebuild_ledger_data import rebuild_journal_entries
 from service import close_period, PeriodAlreadyClosedError, write_ledger_xlsx
 from api._scoping import current_user, scope_owner_id

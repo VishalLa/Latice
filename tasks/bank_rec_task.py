@@ -186,6 +186,22 @@ def run_reconciliation_pipeline(self, ledger_path, bank_path):
             except Exception as db_exc:
                 print(f"Match-result persistence failed for run_id={run_id}: {db_exc}")
 
+            if ignored_list:
+                try:
+                    with get_session() as session:
+                        if not PushBankRecData.push_ignored_records(session, ignored_list):
+                            print(f"Ignored-record persistence failed for run_id={run_id}.")
+                except Exception as db_exc:
+                    print(f"Ignored-record persistence failed for run_id={run_id}: {db_exc}")
+
+            if audit_list:
+                try:
+                    with get_session() as session:
+                        if not PushBankRecData.push_audit_items(session, audit_list):
+                            print(f"Audit-item persistence failed for run_id={run_id}.")
+                except Exception as db_exc:
+                    print(f"Audit-item persistence failed for run_id={run_id}: {db_exc}")
+
         report_name = _report_filename(run_id)
         out_path = _report_path(run_id)
         

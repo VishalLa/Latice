@@ -37,9 +37,6 @@ The system is split into two independently deployable parts:
 12. [Frontend application](#12-frontend-application)
 13. [Deployment notes](#13-deployment-notes)
 14. [Security checklist before going to production](#14-security-checklist-before-going-to-production)
-15. [Known limitations](#15-known-limitations)
-16. [License](#16-license)
-
 ---
 
 ## 1. What it does

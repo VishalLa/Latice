@@ -63,7 +63,7 @@ def _to_matched_pairs(pairs, orientation, amount_type) -> List[MatchedPair]:
     ]
 
 
-def detect_Same_side(
+def detect_same_side(
     gl_records:     Sequence[LedgerFormat],
     bank_records:   Sequence[BankStatement]
 ) -> SameSideDetection:

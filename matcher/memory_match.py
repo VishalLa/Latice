@@ -197,3 +197,76 @@ class MatchMemory:
     def save(self) -> None:
         self.backend.save({k: p.to_dict() for k, p in self._patterns.items()})
 
+
+def memory_matcher(
+    residual_ledger: list,
+    residual_bank:   list,
+    memory: "MatchMemory",
+    same_side: bool,
+    amount_tol: float,
+) -> Tuple[List[dict], list, list]:
+    memory_matches: List[dict] = []
+    gl_pool   = list(residual_ledger)
+    bank_pool = list(residual_bank)
+
+    def _safe_amt(rec, attr: str) -> float:
+        try:
+            v = getattr(rec, attr, 0.0)
+            return float(v) if v not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    for gl in gl_pool:
+        gl_debit  = _safe_amt(gl, "debit_amount")
+        gl_credit = _safe_amt(gl, "credit_amount")
+        account_name = getattr(gl, "account_name", "")
+
+        found = None
+        for bank in bank_pool:
+            narration = getattr(bank, "narration", "")
+            if not memory.is_recognized(account_name, narration):
+                continue
+
+            b_debit  = _safe_amt(bank, "debit_amount")
+            b_credit = _safe_amt(bank, "credit_amount")
+
+            if same_side:
+                amt_ok = (
+                    (gl_debit  > 0 and abs(gl_debit  - b_debit)  <= amount_tol) or
+                    (gl_credit > 0 and abs(gl_credit - b_credit) <= amount_tol)
+                )
+            else:
+                amt_ok = (
+                    (gl_debit  > 0 and abs(gl_debit  - b_credit) <= amount_tol) or
+                    (gl_credit > 0 and abs(gl_credit - b_debit)  <= amount_tol)
+                )
+
+            if amt_ok:
+                found = bank
+                break
+
+        if found is not None:
+            pattern = memory.lookup(account_name, getattr(found, "narration", ""))
+            inner_label = pattern.adjustment_type if pattern else None
+            if inner_label and inner_label.startswith("Recognized Recurring Pattern"):
+                inner_label = None
+            memory_matches.append({
+                "ledger_id":        getattr(gl, "ledger_id", None),
+                "bank_id":          getattr(found, "row_index", None),
+                "adjustment_type":  (
+                    f"Recognized Recurring Pattern"
+                    + (f" ({inner_label})" if inner_label else "")
+                ),
+                "confidence_score": "High",
+                "details": (
+                    f"Counterparty narration recognized from "
+                    f"{pattern.times_seen if pattern else 1} prior run(s); "
+                    f"amount and direction confirmed for this run."
+                ),
+                "match_phase": "memory",
+            })
+            gl_pool.remove(gl)
+            bank_pool.remove(found)
+
+    return memory_matches, gl_pool, bank_pool
+

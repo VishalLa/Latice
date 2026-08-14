@@ -43,6 +43,15 @@ from .tds_schema import (
     TDSResult
 )
 
+from .ai_schema import(
+    AI1to1Match,
+    AIWindowOutput,
+    AILedgerCandidate,
+    AIManyToOneMatch,
+    AIManyToOneOutput,
+    DraftAccountSuggestion
+)
+
 from typing import Optional, Set, List
 
 __all__ = [
@@ -87,6 +96,14 @@ __all__ = [
     "Form26QLine",
     "Form26Q",
     "TDSResult",
+
+    # AI schemas
+    "AI1to1Match",
+    "AIWindowOutput",
+    "AILedgerCandidate",
+    "AIManyToOneMatch",
+    "AIManyToOneOutput",
+    "DraftAccountSuggestion",
 
     "journal_entries_to_ledger_records",
 ]

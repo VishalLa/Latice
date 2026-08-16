@@ -1,0 +1,537 @@
+<mxfile host="Electron" agent="Claude" pages="7">
+  <diagram name="Ledger Pipeline" id="ledgerPipeline">
+    <mxGraphModel dx="4426" dy="2469" grid="0" gridSize="10" guides="0" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1750" pageHeight="1900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;fontSize=20;fontStyle=1;align=left;verticalAlign=middle;" value="build_complete_ledger() — Data Flow Across Modules" vertex="1">
+          <mxGeometry height="30" width="700" x="-332" y="-94" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;fontSize=12;" value="bills: list[dict]&#xa;(from scanner)" vertex="1">
+          <mxGeometry height="60" width="280" x="-60" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;fontSize=12;" value="opening_balances.json" vertex="1">
+          <mxGeometry height="60" width="280" x="600" y="141" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#D5E8D4;strokeColor=#82B366;" value="journal.py&#xa;&#xa;JournalBuilder.to_journal_entries(bills)&#xa;→ per bill: _purchase_entry() / _sales_entry() /&#xa;   _purchase_return_entry() / _sales_return_entry()" vertex="1">
+          <mxGeometry height="120" width="340" x="-90" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#DAE8FC;strokeColor=#6C8EBF;" value="opening_balances.py&#xa;&#xa;load_opening_balances(json_path)&#xa;→ resolve_account(), _build_opening_entry(),&#xa;   _build_manual_entry()&#xa;returns (opening_entries, period_start)" vertex="1">
+          <mxGeometry height="120" width="340" x="571" y="247" as="geometry" />
+        </mxCell>
+        <mxCell id="n12" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#F8CECC;strokeColor=#B85450;dashed=1;" value="gstr1.py  (STANDALONE)&#xa;not called inside build_complete_ledger&#xa;&#xa;GSTR1Builder(bills).build(period_label)&#xa;→ b2b, b2c_large, nil_rated,&#xa;   hsn_summary, totals, warnings" vertex="1">
+          <mxGeometry height="140" width="340" x="390" y="-10" as="geometry" />
+        </mxCell>
+        <mxCell id="n5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#F5F5F5;strokeColor=#666666;" value="__init__.py&#xa;&#xa;build _bill_index:&#xa;&#39;vendor|invoice_number&#39; → bill dict&#xa;(only bills with _status == &#39;ok&#39;)" vertex="1">
+          <mxGeometry height="100" width="340" x="-655" y="216" as="geometry" />
+        </mxCell>
+        <mxCell id="n6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#FFE6CC;strokeColor=#D79B00;" value="tds.py&#xa;&#xa;engine = TDSEngine(financial_year, deductor_tan, deductor_name)&#xa;&#xa;for entry in raw_entries (direction != &#39;output&#39;):&#xa;  engine.process_bill(bill, entry, pan, type, gstin, section)&#xa;→ TDSResult(tds_applied, journal_entry, warnings, tds_entry)" vertex="1">
+          <mxGeometry height="150" width="340" x="-90" y="420" as="geometry" />
+        </mxCell>
+        <mxCell id="n7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#FFF2CC;strokeColor=#D6B656;" value="ledger.py&#xa;&#xa;LedgerBuilder.build(&#xa;  opening_balances=opening_entries,&#xa;  _prebuilt_entries=tds_modified_entries,&#xa;  close_books_on, period_label)" vertex="1">
+          <mxGeometry height="150" width="380" x="551" y="462" as="geometry" />
+        </mxCell>
+        <mxCell id="n8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#E1D5E7;strokeColor=#9673A6;" value="general_ledger_class.py&#xa;&#xa;GeneralLedger.post_entries(entries)&#xa;→ per line: _get_or_create(account)&#xa;   LedgerAccount.post(date, particulars,&#xa;   journal_id, voucher_type, dr_cr, amount)" vertex="1">
+          <mxGeometry height="130" width="340" x="1080" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="n9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#D5E8D4;strokeColor=#82B366;dashed=1;" value="journal.py  (only if close_books_on given)&#xa;&#xa;JournalBuilder().close_books(gl, close_books_on, period_label)&#xa;→ Sales/Purchases → Trading A/c → P&amp;L A/c → Capital A/c&#xa;→ ClosingResult(entries, gross_profit, net_profit, warnings)" vertex="1">
+          <mxGeometry height="130" width="380" x="600" y="852" as="geometry" />
+        </mxCell>
+        <mxCell id="n10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#FFF2CC;strokeColor=#D6B656;" value="ledger.py&#xa;&#xa;ledger_builder = LedgerBuilder(gl, as_on=as_on_date)&#xa;&#xa;.trial_balance()      → TrialBalance&#xa;.gst_summary(period_label) → GSTSummary&#xa;.extract_cash_book()  → list[CashBookLine]&#xa;.creditors_ageing()   → list[AgeingLine]" vertex="1">
+          <mxGeometry height="180" width="380" x="460" y="1080" as="geometry" />
+        </mxCell>
+        <mxCell id="n11" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#FFE6CC;strokeColor=#D79B00;" value="tds.py&#xa;&#xa;(same TDSEngine instance from Stage 3)&#xa;engine.get_register()          → TDSRegister&#xa;engine.build_form_26q(q, s, e) → Form26Q&#xa;engine.pending_deposits(as_on) → list[dict]" vertex="1">
+          <mxGeometry height="180" width="340" x="-90" y="720" as="geometry" />
+        </mxCell>
+        <mxCell id="n13" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#F5F5F5;strokeColor=#666666;" value="__init__.py&#xa;&#xa;_trial_balance_to_opening_format(tb)&#xa;→ closing_balances: list[dict]&#xa;   {account, balance, side}&#xa;(ready for next period&#39;s opening_balances.json)" vertex="1">
+          <mxGeometry height="140" width="340" x="950" y="1100" as="geometry" />
+        </mxCell>
+        <mxCell id="n14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=12;fontStyle=1;fillColor=#F5F5F5;strokeColor=#333333;strokeWidth=2;" value="__init__.py — build_complete_ledger() returns:&#xa;&#xa;{ general_ledger, trial_balance, gst_summary, cash_book,&#xa;  creditors_ageing, all_entries, period_start,&#xa;  tds_engine, tds_register, tds_warnings,&#xa;  tds_pending_deposits, form_26q,&#xa;  closing_result, books_closed, closing_balances }" vertex="1">
+          <mxGeometry height="180" width="560" x="-60" y="1316" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="n1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="n4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="n2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;" target="n3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2b" edge="1" parent="1" source="n1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#B85450;dashed=1;" target="n12" value="bills (direction=&#39;output&#39;)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="n1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n5" value="bills">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="-480" y="60.07" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="n4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="n6" value="raw_entries: list[JournalEntry]">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="n5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="n6" value="src_bill (TDS metadata)">
+          <mxGeometry relative="1" x="-0.4108" as="geometry">
+            <mxPoint y="-1" as="offset" />
+            <Array as="points">
+              <mxPoint x="-480" y="495" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="n3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;" target="n7" value="opening_entries: list[JournalEntry]">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="n6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" target="n7" value="tds_modified_entries: list[JournalEntry]">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="n7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;" target="n8" value="post(entries)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="n8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#9673A6;entryX=1;entryY=0.75;entryDx=0;entryDy=0;" target="n7" value="gl (populated)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="n7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;entryX=0.25;entryY=0.057;entryDx=0;entryDy=0;entryPerimeter=0;" target="n9" value="gl, close_books_on, period_label">
+          <mxGeometry relative="1" x="0.3899" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="n9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#82B366;entryX=0.75;entryY=1;entryDx=0;entryDy=0;exitX=0.75;exitY=0;exitDx=0;exitDy=0;" target="n7" value="closing_result">
+          <mxGeometry relative="1" x="-0.4096" y="3" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="n9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#82B366;dashed=1;" target="n8" value="post(closing_result.entries)">
+          <mxGeometry relative="1" x="0.5639" y="-4" as="geometry">
+            <mxPoint y="1" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="n7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0;exitY=0.75;exitDx=0;exitDy=0;" target="n10" value="ledger_builder, all_entries, closing_result">
+          <mxGeometry relative="1" x="0.338" y="66" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="407.79" y="574.53" />
+              <mxPoint x="407.79" y="1170" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="n6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#D79B00;" target="n11" value="engine (same instance)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="n10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;" target="n13" value="tb: TrialBalance">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e16" edge="1" parent="1" source="n10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;entryX=1;entryY=0.25;entryDx=0;entryDy=0;" target="n14" value="tb, gs, cb, ca">
+          <mxGeometry relative="1" x="-0.505" y="-3" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e17" edge="1" parent="1" source="n11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;entryX=0.25;entryY=0;entryDx=0;entryDy=0;" target="n14" value="tds_register, form_26q, pending">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e18" edge="1" parent="1" source="n7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" target="n14" value="gl, all_entries, closing_result, books_closed">
+          <mxGeometry relative="1" x="0.8845" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e19" edge="1" parent="1" source="n13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;endArrow=block;strokeColor=#666666;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="n14" value="closing_balances">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1090.09" y="1420" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="lt" parent="1" style="text;html=1;fontSize=13;fontStyle=1;align=left;" value="Legend — file ownership" vertex="1">
+          <mxGeometry height="24" width="300" x="40" y="1560" as="geometry" />
+        </mxCell>
+        <mxCell id="l1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F5F5F5;strokeColor=#666666;" value="__init__.py — orchestrator (build_complete_ledger)" vertex="1">
+          <mxGeometry height="30" width="480" x="40" y="1590" as="geometry" />
+        </mxCell>
+        <mxCell id="l2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;fillColor=#DAE8FC;strokeColor=#6C8EBF;" value="opening_balances.py — load_opening_balances()" vertex="1">
+          <mxGeometry height="30" width="480" x="40" y="1626" as="geometry" />
+        </mxCell>
+        <mxCell id="l3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;fillColor=#D5E8D4;strokeColor=#82B366;" value="journal.py — JournalBuilder (to_journal_entries, close_books)" vertex="1">
+          <mxGeometry height="30" width="480" x="40" y="1662" as="geometry" />
+        </mxCell>
+        <mxCell id="l4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFE6CC;strokeColor=#D79B00;" value="tds.py — TDSEngine" vertex="1">
+          <mxGeometry height="30" width="480" x="40" y="1698" as="geometry" />
+        </mxCell>
+        <mxCell id="l5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFF2CC;strokeColor=#D6B656;" value="ledger.py — LedgerBuilder / build_ledger" vertex="1">
+          <mxGeometry height="30" width="480" x="40" y="1734" as="geometry" />
+        </mxCell>
+        <mxCell id="l6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E1D5E7;strokeColor=#9673A6;" value="general_ledger_class.py — GeneralLedger" vertex="1">
+          <mxGeometry height="30" width="480" x="40" y="1770" as="geometry" />
+        </mxCell>
+        <mxCell id="l7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F8CECC;strokeColor=#B85450;dashed=1;" value="gstr1.py — GSTR1Builder (standalone, not wired into pipeline)" vertex="1">
+          <mxGeometry height="30" width="480" x="40" y="1806" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="journal.py - JournalBuilder" id="journalPy">
+    <mxGraphModel dx="4630" dy="2813" grid="0" gridSize="10" guides="0" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1300" pageHeight="1150" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="jtitle" parent="1" style="text;html=1;fontSize=18;fontStyle=1;align=left;" value="journal.py — class JournalBuilder — method-level data flow" vertex="1">
+          <mxGeometry height="30" width="800" x="-114" y="-118" as="geometry" />
+        </mxCell>
+        <mxCell id="jb_cls" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" value="JournalBuilder&#xa;&#xa;__init__(bill: dict, today_fn=date.today)&#xa;self.bill = bill&#xa;self._today_fn = today_fn" vertex="1">
+          <mxGeometry height="90" width="245" x="-175" y="-36" as="geometry" />
+        </mxCell>
+        <mxCell id="jb_req" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#D5E8D4;strokeColor=#82B366;" value="_require_bill()&#xa;raises ValueError if self.bill is None&#xa;→ returns self.bill" vertex="1">
+          <mxGeometry height="70" width="217" x="-26" y="108" as="geometry" />
+        </mxCell>
+        <mxCell id="jb_toentry" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#D5E8D4;strokeColor=#82B366;" value="to_journal_entry()&#xa;bill = _require_bill()&#xa;if bill[&#39;_status&#39;] != &#39;ok&#39;: return None&#xa;if grand_total &lt;= 0: return None&#xa;dispatch on return_type / direction →" vertex="1">
+          <mxGeometry height="120" width="249" x="-42" y="227" as="geometry" />
+        </mxCell>
+        <mxCell id="jb_purchase" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#D5E8D4;strokeColor=#82B366;" value="_purchase_entry()&#xa;in: taxable, cgst, sgst, igst, cess,&#xa; other_chg, round_off, discount, grand,&#xa; vendor, pay_mode, inv_no, date&#xa;&#xa;Dr: Purchases, Input CGST/SGST/IGST/Cess,&#xa;    Other Charges, Round Off&#xa;Cr: Vendor/Cash/Bank (− discount)&#xa;→ balance &amp; round-off fix&#xa;→ JournalEntry(direction=&#39;input&#39;)" vertex="1">
+          <mxGeometry height="158" width="241" x="3" y="405" as="geometry" />
+        </mxCell>
+        <mxCell id="jb_sales" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#D5E8D4;strokeColor=#82B366;" value="_sales_entry()&#xa;in: taxable, cgst, sgst, igst, cess,&#xa; other_chg, round_off, discount, grand,&#xa; buyer, pay_mode, inv_no, date&#xa;&#xa;Dr: Buyer/Cash/Bank (− discount)&#xa;Cr: Sales, Output CGST/SGST/IGST/Cess,&#xa;    Other Charges, Round Off&#xa;→ balance &amp; round-off fix&#xa;→ JournalEntry(direction=&#39;output&#39;)" vertex="1">
+          <mxGeometry height="149" width="224" x="360" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="jb_pret" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#D5E8D4;strokeColor=#82B366;" value="_purchase_return_entry()&#xa;(Debit Note)&#xa;&#xa;mirrors _purchase_entry() with&#xa;debits/credits reversed&#xa;→ JournalEntry" vertex="1">
+          <mxGeometry height="118" width="171" x="680" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="jb_sret" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#D5E8D4;strokeColor=#82B366;" value="_sales_return_entry()&#xa;(Credit Note)&#xa;&#xa;mirrors _sales_entry() with&#xa;debits/credits reversed&#xa;→ JournalEntry" vertex="1">
+          <mxGeometry height="123" width="152" x="1000" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="jb_tojes" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#B9E0A5;strokeColor=#82B366;fontStyle=1;" value="to_journal_entries(bills, today_fn)  [classmethod]&#xa;for bill in bills:&#xa;  entry = cls(bill, today_fn).to_journal_entry()&#xa;  if entry: entries.append(entry)&#xa;return sorted(entries, key=lambda e: e.date)&#xa;→ list[JournalEntry]" vertex="1">
+          <mxGeometry height="140" width="323" x="40" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="jb_gst" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#D5E8D4;strokeColor=#82B366;" value="gst_settlement_entry(input_cgst/sgst/igst,&#xa; output_cgst/sgst/igst, period_label)&#xa;&#xa;Steps 1-3: offset = min(input, output) per tax&#xa;→ ITC set-off JournalEntry&#xa;Step 4: net_payable = output − offset&#xa;→ &#39;Net GST payable&#39; JournalEntry&#xa;→ list[JournalEntry]  (0-2 entries)" vertex="1">
+          <mxGeometry height="161" width="255" x="359" y="-70" as="geometry" />
+        </mxCell>
+        <mxCell id="jb_close" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#D5E8D4;strokeColor=#82B366;" value="close_books(gl: GeneralLedger, period_end, period_label)&#xa;&#xa;1. snapshot P&amp;L balances via gl.accounts_in_group(group)&#xa;2. gross_profit = sales+direct_income − purchases−direct_exp&#xa;3. Dr Sales+DirectIncome / Cr Trading A/c&#xa;4. Dr Trading A/c / Cr Purchases+DirectExp&#xa;5. transfer Gross P/L → Trading A/c ↔ P&amp;L A/c&#xa;6. Dr IndirectIncome/Cr P&amp;L A/c ; Dr P&amp;L A/c/Cr IndirectExp&#xa;7. net_profit = gross_profit + indirect_income − indirect_exp&#xa;8. transfer Net P/L → P&amp;L A/c → Capital A/c&#xa;&#xa;→ ClosingResult(entries, gross_profit, net_profit, warnings)" vertex="1">
+          <mxGeometry height="222" width="365" x="40" y="860" as="geometry" />
+        </mxCell>
+        <mxCell id="je1" edge="1" parent="1" source="jb_cls" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;" target="jb_req">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="je2" edge="1" parent="1" source="jb_req" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;" target="jb_toentry">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="je3" edge="1" parent="1" source="jb_toentry" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;" target="jb_pret" value="return_type==&#39;debit_note&#39;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="je4" edge="1" parent="1" source="jb_toentry" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;exitX=1;exitY=0.25;exitDx=0;exitDy=0;" target="jb_sret" value="return_type==&#39;credit_note&#39;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="je5" edge="1" parent="1" source="jb_toentry" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;exitX=1;exitY=0.75;exitDx=0;exitDy=0;" target="jb_sales" value="direction==&#39;output&#39;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="je6" edge="1" parent="1" source="jb_toentry" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;" target="jb_purchase" value="else (input)">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="je7" edge="1" parent="1" source="jb_toentry" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0;exitY=0.75;exitDx=0;exitDy=0;" target="jb_tojes" value="instantiates JournalBuilder(bill) per bill">
+          <mxGeometry relative="1" x="0.437" y="2" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="je8" edge="1" parent="1" source="jb_cls" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=9;strokeColor=#999999;" target="jb_gst" value="independent utility — used during GST reconciliation">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="je9" edge="1" parent="1" source="jb_cls" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=9;strokeColor=#999999;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0;exitY=0.75;exitDx=0;exitDy=0;" target="jb_close" value="called by ledger.py → LedgerBuilder.build()">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="tds.py - TDSEngine" id="tdsPy">
+    <mxGraphModel dx="2707" dy="1716" grid="0" gridSize="10" guides="0" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1300" pageHeight="1600" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="ttitle" parent="1" style="text;html=1;fontSize=18;fontStyle=1;align=left;" value="tds.py — class TDSEngine — method-level data flow" vertex="1">
+          <mxGeometry height="30" width="800" x="-48" y="-62" as="geometry" />
+        </mxCell>
+        <mxCell id="td_cls" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#FFE6CC;strokeColor=#D79B00;fontStyle=1;" value="TDSEngine&#xa;&#xa;__init__(financial_year, deductor_tan, deductor_name)&#xa;self._entries: list[TDSEntry] = []&#xa;self._aggregates: dict[(name,section), float] = {}" vertex="1">
+          <mxGeometry height="100" width="420" x="-52" y="-19" as="geometry" />
+        </mxCell>
+        <mxCell id="td_detect" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="detect_section(description)&#xa;scans _KEYWORD_SECTION_MAP&#xa;(keyword in text.lower())&#xa;→ section_code | None" vertex="1">
+          <mxGeometry height="103" width="208" x="-33" y="122" as="geometry" />
+        </mxCell>
+        <mxCell id="td_appl" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="[static] applicable_sections_for_amount(&#xa; gross_amount, section_code,&#xa; deductee_name, aggregates)&#xa;pre-check helper for callers&#xa;→ bool" vertex="1">
+          <mxGeometry height="88" width="243" x="250" y="109" as="geometry" />
+        </mxCell>
+        <mxCell id="td_base" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="_compute_tds_base(section, grand,&#xa; taxable, cgst, sgst, igst)&#xa;if section.tds_on_gst: base = grand&#xa;elif taxable&gt;0: base = taxable&#xa;else: base = grand − GST (fallback)&#xa;→ float" vertex="1">
+          <mxGeometry height="96" width="212" x="551" y="102" as="geometry" />
+        </mxCell>
+        <mxCell id="td_rate" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="_compute_rate(section, deductee_type, pan)&#xa;base_rate = individual_huf | others rate&#xa;if pan missing &amp; rate&lt;20%:&#xa;  → (20%, enhanced_206aa=True)&#xa;else → (base_rate, False)" vertex="1">
+          <mxGeometry height="105" width="236" x="1150" y="98" as="geometry" />
+        </mxCell>
+        <mxCell id="td_thresh" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="_check_thresholds(section_code, deductee_name,&#xa; gross_amount, tds_base, entry_date)&#xa;&#xa;running = self._aggregates[(name,section)]&#xa;single_ok = gross &gt; threshold_single (or 0)&#xa;new_running = running + gross&#xa;if new_running &lt;= threshold_aggregate:&#xa;  update aggregate; return (False, None)&#xa;elif crossed first time: build warning&#xa;self._aggregates[key] = new_running&#xa;→ (applies: bool, warning: str|None)" vertex="1">
+          <mxGeometry height="153" width="271" x="134" y="350" as="geometry" />
+        </mxCell>
+        <mxCell id="td_inject" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="[static] _inject_tds_into_entry(original,&#xa; tds_amount, net_payment, vendor,&#xa; section_code, inv_no)&#xa;splits original credit line into:&#xa;  Vendor/Cash Cr → net_payment&#xa;  TDS Payable A/c Cr → tds_amount&#xa;→ modified JournalEntry" vertex="1">
+          <mxGeometry height="122" width="220" x="876" y="106" as="geometry" />
+        </mxCell>
+        <mxCell id="td_process" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FDCB7C;strokeColor=#D79B00;fontStyle=1;" value="process_bill(bill, journal_entry, deductee_pan,&#xa; deductee_type, deductee_gstin, tds_section)&#xa;&#xa;1. extract vendor, inv_no, date, grand, taxable,&#xa;   cgst, sgst, igst from bill&#xa;2. section_code = tds_section or detect_section(desc)&#xa;   → none: return TDSResult(applied=False)&#xa;3. lookup TDS_SECTIONS[section_code]&#xa;   → &#39;192&#39; (salary): warn, return unapplied&#xa;4. tds_base = _compute_tds_base(...)&#xa;5. applies, warn = _check_thresholds(...)&#xa;   → not applies: return unapplied&#xa;6. rate, enhanced = _compute_rate(...)&#xa;7. tds_amount = round(base × rate / 100)&#xa;   net_payment = grand − tds_amount&#xa;8. build TDSEntry, append to self._entries&#xa;9. if journal_entry: modified = _inject_tds_into_entry(...)&#xa;→ TDSResult(journal_entry, tds_entry,&#xa;   tds_applied=True, warnings)" vertex="1">
+          <mxGeometry height="295" width="362" x="89" y="594" as="geometry" />
+        </mxCell>
+        <mxCell id="td_manual" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="process_manual_entry(...)&#xa;same TDS logic as process_bill()&#xa;but sourced from a manual journal dict&#xa;rather than a scanned bill&#xa;→ TDSResult" vertex="1">
+          <mxGeometry height="98" width="232" x="-394" y="767" as="geometry" />
+        </mxCell>
+        <mxCell id="td_deposit" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="[static] tds_deposit_entry(tds_entries,&#xa; deposit_date, challan_bsr, challan_serial,&#xa; payment_mode=&#39;BANK&#39;)&#xa;total = sum(e.tds_amount for e in tds_entries)&#xa;Dr TDS Payable / Cr Bank or Cash&#xa;→ JournalEntry" vertex="1">
+          <mxGeometry height="109" width="232" x="782" y="998" as="geometry" />
+        </mxCell>
+        <mxCell id="td_mark" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="mark_deposited(entry_id, deposit_date,&#xa; challan_bsr, challan_serial, challan_date)&#xa;finds TDSEntry in self._entries,&#xa;sets deposit_date/challan_bsr_code/&#xa;challan_serial/challan_date&#xa;→ bool (found/updated)" vertex="1">
+          <mxGeometry height="110" width="245" x="410" y="1000" as="geometry" />
+        </mxCell>
+        <mxCell id="td_register" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="get_register(period_start, period_end)&#xa;filters self._entries by date range&#xa;(or all entries if none given)&#xa;→ TDSRegister(entries, period_start, period_end)" vertex="1">
+          <mxGeometry height="88" width="289" x="125" y="1194" as="geometry" />
+        </mxCell>
+        <mxCell id="td_26q" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="build_form_26q(quarter, period_start, period_end)&#xa;register = get_register(period_start, period_end)&#xa;for e in register.entries (skip section &#39;192&#39;):&#xa;  → Form26QLine(pan, name, type_code, section_code,&#xa;    dates, gross, base, rate, tds, challan info)&#xa;→ Form26Q(quarter, financial_year, lines)" vertex="1">
+          <mxGeometry height="115" width="272" x="467" y="1181" as="geometry" />
+        </mxCell>
+        <mxCell id="td_due" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="[static] _tds_due_date(deduction_date, section)&#xa;March deductions → 30 April&#xa;other months → 7th of next month&#xa;→ due date" vertex="1">
+          <mxGeometry height="77" width="253" x="120" y="1362" as="geometry" />
+        </mxCell>
+        <mxCell id="td_pending" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="pending_deposits(as_on)&#xa;for e in self._entries where not is_deposited:&#xa;  due = _tds_due_date(e.date, section)&#xa;  days_overdue = as_on − due&#xa;→ list[dict] sorted by days_overdue desc" vertex="1">
+          <mxGeometry height="105" width="243" x="473" y="1348" as="geometry" />
+        </mxCell>
+        <mxCell id="td_recv" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="[static] tds_receivable_entry(...)&#xa;for sales where the buyer deducts TDS on us&#xa;Dr TDS Receivable / Cr Debtor&#xa;→ JournalEntry" vertex="1">
+          <mxGeometry height="110" width="330" x="107" y="1527" as="geometry" />
+        </mxCell>
+        <mxCell id="td_cert" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFE6CC;strokeColor=#D79B00;" value="[static] tds_certificate_entry(...)&#xa;records receipt of Form 16A from a&#xa;customer for TDS they deducted on us&#xa;→ JournalEntry" vertex="1">
+          <mxGeometry height="93" width="214" x="480" y="1524" as="geometry" />
+        </mxCell>
+        <mxCell id="te1" edge="1" parent="1" source="td_process" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.002;entryY=0.533;entryDx=0;entryDy=0;entryPerimeter=0;" target="td_detect">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="-117.86" y="741.52" />
+              <mxPoint x="-117.86" y="176.86" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="te2" edge="1" parent="1" source="td_process" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;exitX=1;exitY=0.25;exitDx=0;exitDy=0;" target="td_base">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="te3" edge="1" parent="1" source="td_process" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;" target="td_thresh">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="te4" edge="1" parent="1" source="td_process" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;exitX=1;exitY=0.75;exitDx=0;exitDy=0;" target="td_rate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="te5" edge="1" parent="1" source="td_process" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;" target="td_inject">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="te6" edge="1" parent="1" source="td_process" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=9;strokeColor=#999999;exitX=0;exitY=0.75;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="td_manual" value="same logic path">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="-157" y="815.32" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="te7" edge="1" parent="1" source="td_26q" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;" target="td_register">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="te8" edge="1" parent="1" source="td_pending" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;" target="td_due">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="te9" edge="1" parent="1" source="td_process" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=9;strokeColor=#999999;" target="td_register" value="self._entries populated by process_bill()">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="ledger.py - LedgerBuilder" id="ledgerPy">
+    <mxGraphModel dx="2213" dy="1034" grid="0" gridSize="10" guides="0" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1300" pageHeight="1250" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="ltitle" parent="1" style="text;html=1;fontSize=18;fontStyle=1;align=left;" value="ledger.py — class LedgerBuilder — method-level data flow" vertex="1">
+          <mxGeometry height="30" width="800" x="40" as="geometry" />
+        </mxCell>
+        <mxCell id="lb_cls" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#FFF2CC;strokeColor=#D6B656;fontStyle=1;" value="LedgerBuilder&#xa;&#xa;__init__(gl: GeneralLedger=None, as_on: date=None)&#xa;self.gl = gl or GeneralLedger()&#xa;self.as_on = as_on or date.today()" vertex="1">
+          <mxGeometry height="100" width="440" x="40" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="lb_build" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FCE3A1;strokeColor=#D6B656;fontStyle=1;" value="build(bills, opening_balances, _prebuilt_entries,&#xa; close_books_on, period_label)  [classmethod]&#xa;&#xa;1. gl = GeneralLedger()&#xa;2. if opening_balances: gl.post_entries(opening_balances)&#xa;3. tx_entries = _prebuilt_entries or&#xa;     JournalBuilder.to_journal_entries(bills)&#xa;4. gl.post_entries(tx_entries)&#xa;5. all_entries.sort(key=lambda e: e.date)&#xa;6. if close_books_on:&#xa;     closing_result = JournalBuilder().close_books(&#xa;       gl, close_books_on, period_label)&#xa;     gl.post_entries(closing_result.entries)&#xa;7. builder = cls(gl, as_on=close_books_on or today)&#xa;→ (builder, all_entries, closing_result)" vertex="1">
+          <mxGeometry height="233" width="434" x="12" y="168" as="geometry" />
+        </mxCell>
+        <mxCell id="lb_extpost" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#E1D5E7;strokeColor=#9673A6;dashed=1;" value="general_ledger_class.py&#xa;GeneralLedger.post_entries(entries)" vertex="1">
+          <mxGeometry height="70" width="320" x="557" y="64" as="geometry" />
+        </mxCell>
+        <mxCell id="lb_extclose" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#D5E8D4;strokeColor=#82B366;dashed=1;" value="journal.py&#xa;JournalBuilder().close_books(gl, close_books_on, period_label)&#xa;→ ClosingResult" vertex="1">
+          <mxGeometry height="90" width="320" x="635" y="238" as="geometry" />
+        </mxCell>
+        <mxCell id="lb_tb" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFF2CC;strokeColor=#D6B656;" value="trial_balance()&#xa;for acc in self.gl.accounts:&#xa;  skip if no postings or balance==0&#xa;  → TrialBalanceLine(dr/cr split)&#xa;total_dr/total_cr = sum(lines)&#xa;→ TrialBalance(lines, as_on, totals)" vertex="1">
+          <mxGeometry height="120" width="211" x="-93" y="484" as="geometry" />
+        </mxCell>
+        <mxCell id="lb_gst" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFF2CC;strokeColor=#D6B656;" value="gst_summary(period_label)&#xa;read Output/Input CGST/SGST/IGST/CESS&#xa;via self.gl.get(account_name)&#xa;&#xa;ITC cascade:&#xa; IGST → IGST liability → CGST → SGST&#xa; CGST → CGST liability&#xa; SGST → SGST liability&#xa;&#xa;→ GSTSummary(net payable, itc_carry_forward)" vertex="1">
+          <mxGeometry height="170" width="259" x="664" y="517" as="geometry" />
+        </mxCell>
+        <mxCell id="lb_cb" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFF2CC;strokeColor=#D6B656;" value="extract_cash_book()&#xa;combine Cash + Bank account postings&#xa;sorted by date, running balance&#xa;→ list[CashBookLine]" vertex="1">
+          <mxGeometry height="150" width="340" x="1110" y="267" as="geometry" />
+        </mxCell>
+        <mxCell id="lb_ca" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFF2CC;strokeColor=#D6B656;" value="creditors_ageing()&#xa;for acc in gl.accounts_in_group(SUNDRY_CREDITORS):&#xa;  bucket postings by (as_on − posting.date):&#xa;   ≤30 / 31-60 / 61-90 / &gt;90&#xa;→ list[AgeingLine] sorted by balance desc" vertex="1">
+          <mxGeometry height="114" width="261" x="99" y="798" as="geometry" />
+        </mxCell>
+        <mxCell id="lb_wrap" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#FFF2CC;strokeColor=#D6B656;" value="build_ledger(bills, opening_balances,&#xa; _prebuilt_entries, close_books_on, period_label)&#xa;[module-level function]&#xa;calls LedgerBuilder.build(...) and unwraps&#xa;→ (gl, all_entries, closing_result)" vertex="1">
+          <mxGeometry height="99" width="228" x="419" y="798" as="geometry" />
+        </mxCell>
+        <mxCell id="le1" edge="1" parent="1" source="lb_cls" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;" target="lb_build">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le2" edge="1" parent="1" source="lb_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=9;strokeColor=#9673A6;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0.25;entryY=1;entryDx=0;entryDy=0;" target="lb_extpost" value="post opening + tx entries">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le3" edge="1" parent="1" source="lb_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=9;strokeColor=#82B366;" target="lb_extclose" value="close_books_on given">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le4" edge="1" parent="1" source="lb_extclose" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=9;strokeColor=#82B366;entryX=0.75;entryY=1;entryDx=0;entryDy=0;" target="lb_extpost" value="post closing entries">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le5" edge="1" parent="1" source="lb_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;exitX=0.25;exitY=1;exitDx=0;exitDy=0;" target="lb_tb" value="reporting, called on the returned builder">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="120.51" y="441.05" />
+              <mxPoint x="18" y="441.05" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="le6" edge="1" parent="1" source="lb_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;exitX=0.75;exitY=1;exitDx=0;exitDy=0;" target="lb_gst">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le7" edge="1" parent="1" source="lb_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;exitX=1;exitY=0.75;exitDx=0;exitDy=0;" target="lb_cb">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le8" edge="1" parent="1" source="lb_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;" target="lb_ca">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le9" edge="1" parent="1" source="lb_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=9;strokeColor=#999999;exitX=0.6;exitY=0.995;exitDx=0;exitDy=0;exitPerimeter=0;" target="lb_wrap" value="thin wrapper">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="general_ledger_class.py - GeneralLedger" id="glcPy">
+    <mxGraphModel dx="2115" dy="1207" grid="0" gridSize="10" guides="0" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1000" pageHeight="800" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="gtitle" parent="1" style="text;html=1;fontSize=18;fontStyle=1;align=left;" value="general_ledger_class.py — class GeneralLedger — method-level data flow" vertex="1">
+          <mxGeometry height="30" width="800" x="40" as="geometry" />
+        </mxCell>
+        <mxCell id="gc_cls" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#E1D5E7;strokeColor=#9673A6;fontStyle=1;" value="GeneralLedger&#xa;&#xa;__init__()&#xa;self._accounts: dict[str, LedgerAccount] = {}" vertex="1">
+          <mxGeometry height="90" width="420" x="80" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="gc_goc" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#E1D5E7;strokeColor=#9673A6;" value="_get_or_create(account: Account) → LedgerAccount&#xa;if account.name not in self._accounts:&#xa;  self._accounts[account.name] = LedgerAccount(account)&#xa;return self._accounts[account.name]" vertex="1">
+          <mxGeometry height="100" width="322" x="440" y="147" as="geometry" />
+        </mxCell>
+        <mxCell id="gc_post" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#D0B8DA;strokeColor=#9673A6;fontStyle=1;" value="post_entries(entries: list[JournalEntry])&#xa;for entry in entries:&#xa;  debit_names  = [names where line.dr_cr == DEBIT]&#xa;  credit_names = [names where line.dr_cr == CREDIT]&#xa;  for line in entry.lines:&#xa;    acc = _get_or_create(line.account)&#xa;    particulars = &#39;To &lt;credit names&gt;&#39;  (if this line is a Dr)&#xa;                  &#39;By &lt;debit names&gt;&#39;   (if this line is a Cr)&#xa;    acc.post(entry.date, particulars, entry.entry_id,&#xa;      entry.voucher_type, line.dr_cr, line.amount)" vertex="1">
+          <mxGeometry height="162" width="372" x="103" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="gc_props" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#E1D5E7;strokeColor=#9673A6;" value="accounts  (property) → sorted list[LedgerAccount] by name&#xa;get(account_name) → LedgerAccount | None&#xa;accounts_in_group(group: AccountGroup)&#xa;  → list[LedgerAccount] filtered by group" vertex="1">
+          <mxGeometry height="105" width="333" x="122" y="546" as="geometry" />
+        </mxCell>
+        <mxCell id="ge1" edge="1" parent="1" source="gc_cls" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;" target="gc_post">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ge2" edge="1" parent="1" source="gc_post" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;exitX=0.75;exitY=0;exitDx=0;exitDy=0;" target="gc_goc" value="per line">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ge3" edge="1" parent="1" source="gc_post" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=9;strokeColor=#999999;" target="gc_props" value="self._accounts populated by post_entries()">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="opening_balances.py" id="obPy">
+    <mxGraphModel dx="1269" dy="724" grid="0" gridSize="10" guides="0" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1000" pageHeight="750" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="otitle" parent="1" style="text;html=1;fontSize=18;fontStyle=1;align=left;" value="opening_balances.py — function-level data flow" vertex="1">
+          <mxGeometry height="30" width="800" x="40" as="geometry" />
+        </mxCell>
+        <mxCell id="ob_resolve" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontStyle=1;" value="resolve_account(name: str) → Account&#xa;1. exact match in _COA_BY_NAME → return it&#xa;2. keyword match in _KNOWN_GROUPS&#xa;   (case-insensitive substring) → Account(name, group)&#xa;3. fallback → Account(name, INDIRECT_EXPENSES)" vertex="1">
+          <mxGeometry height="118" width="334" x="40" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="ob_open" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#DAE8FC;strokeColor=#6C8EBF;" value="_build_opening_entry(balances: list[dict], period_start)&#xa;for item in balances:&#xa;  name, amount, side (&#39;Dr&#39;/&#39;Cr&#39;)&#xa;  account = resolve_account(name)&#xa;  → EntryLine(account, dr_cr, amount)&#xa;total_dr, total_cr computed from lines&#xa;diff = total_dr − total_cr&#xa;if |diff| &gt; 0.01: append balancing&#xa;  Capital A/c line (Cr if diff&gt;0 else Dr)&#xa;→ JournalEntry(&#39;Opening Entry&#39;, date=period_start)" vertex="1">
+          <mxGeometry height="182" width="316" x="50" y="239" as="geometry" />
+        </mxCell>
+        <mxCell id="ob_manual" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#DAE8FC;strokeColor=#6C8EBF;" value="_build_manual_entry(entry_dict: dict)&#xa;parse date, voucher_type, narration, lines&#xa;for ld in lines_data:&#xa;  account = resolve_account(name)&#xa;  → EntryLine(account, dr_cr, amount)&#xa;try: return JournalEntry(...)&#xa;except ValueError:&#xa;  log warning, return None (unbalanced)" vertex="1">
+          <mxGeometry height="162" width="267" x="535" y="17" as="geometry" />
+        </mxCell>
+        <mxCell id="ob_load" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#B8CDEC;strokeColor=#6C8EBF;fontStyle=1;" value="load_opening_balances(json_path) → (entries, period_start)&#xa;1. read + parse JSON (missing/parse errors → [], None)&#xa;2. period_start = parse_indian_date(data[&#39;period_start&#39;])&#xa;3. ob_entry = _build_opening_entry(data[&#39;opening_balances&#39;], ob_date)&#xa;4. manual_entries = [_build_manual_entry(d) for d in data[&#39;manual_entries&#39;]]&#xa;5. entries = [ob_entry] + manual_entries ; sort by date&#xa;→ (list[JournalEntry], period_start | None)" vertex="1">
+          <mxGeometry height="126" width="434" x="99" y="555" as="geometry" />
+        </mxCell>
+        <mxCell id="oe1" edge="1" parent="1" source="ob_load" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;exitX=0.25;exitY=0;exitDx=0;exitDy=0;" target="ob_open">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oe2" edge="1" parent="1" source="ob_load" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="ob_manual">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oe3" edge="1" parent="1" source="ob_open" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;" target="ob_resolve">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="oe4" edge="1" parent="1" source="ob_manual" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;" target="ob_resolve">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="gstr1.py - GSTR1Builder" id="gstr1Py">
+    <mxGraphModel dx="2820" dy="1609" grid="0" gridSize="10" guides="0" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1050" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="rtitle" parent="1" style="text;html=1;fontSize=18;fontStyle=1;align=left;" value="gstr1.py — class GSTR1Builder — method-level data flow" vertex="1">
+          <mxGeometry height="30" width="800" x="31" y="351" as="geometry" />
+        </mxCell>
+        <mxCell id="g1_cls" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#F8CECC;strokeColor=#B85450;fontStyle=1;" value="GSTR1Builder&#xa;&#xa;__init__(bills: list[dict])&#xa;self.bills = bills" vertex="1">
+          <mxGeometry height="88" width="198" x="748" y="490" as="geometry" />
+        </mxCell>
+        <mxCell id="g1_b2b" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#F8CECC;strokeColor=#B85450;" value="_build_b2b(warnings)  — Table 4&#xa;filter bills: _is_output(bill) &amp; buyer_gstin valid (len≥15)&#xa;per bill → row(receiver_gstin, receiver_name, invoice_number,&#xa;  invoice_date, invoice_value, place_of_supply, supply_type,&#xa;  gst_rate, taxable_value, cgst/sgst/igst/cess, row_type:&#xa;  Regular/Credit Note/Debit Note)&#xa;warn if invoice_number missing&#xa;→ list[dict]" vertex="1">
+          <mxGeometry height="118" width="322" x="350" y="466" as="geometry" />
+        </mxCell>
+        <mxCell id="g1_b2c" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#F8CECC;strokeColor=#B85450;" value="_build_b2c_large()  — Table 7&#xa;filter: output, no buyer_gstin, supply_type==&#39;inter&#39;,&#xa;  grand_total ≥ ₹2.5L (_B2C_LARGE_THRESHOLD)&#xa;group by (place_of_supply, gst_rate)&#xa;aggregate taxable_value, igst, cess, invoice_count&#xa;→ list[dict]" vertex="1">
+          <mxGeometry height="124" width="266" x="833" y="869" as="geometry" />
+        </mxCell>
+        <mxCell id="g1_nil" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#F8CECC;strokeColor=#B85450;" value="_build_nil_rated()  — Table 8&#xa;filter: output &amp; _is_nil_exempt(bill)&#xa;bucket by category (nil/exempt/non_gst)&#xa;  × (b2b if buyer_gstin else b2c)&#xa;sum taxable amounts per bucket&#xa;→ dict of totals (9 keys incl. total_nil/exempt/non_gst)" vertex="1">
+          <mxGeometry height="139" width="289" x="82" y="1109" as="geometry" />
+        </mxCell>
+        <mxCell id="g1_hsn" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#F8CECC;strokeColor=#B85450;" value="_build_hsn_summary(warnings)  — Table 12&#xa;group by (hsn_sac, uom, gst_rate)&#xa;aggregate quantity &amp; taxable/tax value per group&#xa;warn + bucket under &#39;UNKNOWN&#39; if hsn_sac missing&#xa;→ list[dict]" vertex="1">
+          <mxGeometry height="112" width="279" x="649" y="1133" as="geometry" />
+        </mxCell>
+        <mxCell id="g1_totals" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#F8CECC;strokeColor=#B85450;" value="_grand_totals(b2b, b2c_large, hsn)&#xa;sum taxable_value/cgst/sgst/igst/cess&#xa;across all three tables&#xa;→ dict of grand totals" vertex="1">
+          <mxGeometry height="80" width="197" x="197" y="663" as="geometry" />
+        </mxCell>
+        <mxCell id="g1_build" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=11;fillColor=#F5A9A6;strokeColor=#B85450;fontStyle=1;" value="build(period_label=&#39;&#39;)&#xa;warnings = []&#xa;b2b = _build_b2b(warnings)&#xa;b2c_large = _build_b2c_large()&#xa;nil_rated = _build_nil_rated()&#xa;hsn = _build_hsn_summary(warnings)&#xa;totals = _grand_totals(b2b, b2c_large, hsn)&#xa;→ dict{ b2b, b2c_large, nil_rated, hsn_summary,&#xa;  period_label, totals, warnings }" vertex="1">
+          <mxGeometry height="182" width="328" x="347" y="840" as="geometry" />
+        </mxCell>
+        <mxCell id="re1" edge="1" parent="1" source="g1_state" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" target="g1_build">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="re2" edge="1" parent="1" source="g1_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" target="g1_b2b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="re3" edge="1" parent="1" source="g1_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;" target="g1_b2c">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="re4" edge="1" parent="1" source="g1_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;exitX=0.25;exitY=1;exitDx=0;exitDy=0;" target="g1_nil">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="re5" edge="1" parent="1" source="g1_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;exitX=0.75;exitY=1;exitDx=0;exitDy=0;" target="g1_hsn">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="re6" edge="1" parent="1" source="g1_build" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=9;strokeColor=#666666;exitX=0.25;exitY=0;exitDx=0;exitDy=0;" target="g1_totals">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="re7" edge="1" parent="1" source="g1_b2b" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=9;strokeColor=#999999;entryX=0.25;entryY=0;entryDx=0;entryDy=0;exitX=1;exitY=0.75;exitDx=0;exitDy=0;" target="g1_state" value="place_of_supply fallback">
+          <mxGeometry relative="1" x="0.5039" y="-11" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ZnqleTq3_1glx8BGpkKc-1" edge="1" parent="1" source="g1_cls" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10;strokeColor=#666666;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" target="g1_state" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="41" y="88" as="sourcePoint" />
+            <mxPoint x="500" y="820" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="g1_state" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fontSize=10;fillColor=#F8CECC;strokeColor=#B85450;" value="_state_from_gstin(gstin)&#xa;first 2 digits → _STATE_CODE_MAP lookup&#xa;→ state name (or &#39;Unknown&#39; / &#39;State &lt;code&gt;&#39;)" vertex="1">
+          <mxGeometry height="75" width="255" x="656" y="660" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

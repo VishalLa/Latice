@@ -13,3 +13,5 @@ myenv/
 
 *.env 
 test.*
+
+*.drawio.*

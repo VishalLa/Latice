@@ -6,7 +6,7 @@ from typing import Optional
 from .helper import _safe, _supply_type, _is_nil_exempt, _effective_rate, _is_output
 
 
-class GSTR1:
+class GSTR1Builder:
     """
     GSTR-1 (Outward Supplies Return) Data Aggregator
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 from datetime import date
-from dateutil import dateparser
+from dateutil import parser as dateparser
 
 # date normalisation
 def parse_indian_date(raw: Optional[str]) -> date:

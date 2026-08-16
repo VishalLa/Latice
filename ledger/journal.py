@@ -19,12 +19,14 @@ from .helper import parse_indian_date, _safe
 class JournalBuilder:
     def __init__(
         self,
-        today_fn: Callable[[], date] = date.today
+        bill: dict,
+        today_fn: Callable[[], date] = date.today,
     ) -> None:
         self._today_fn = today_fn
+        self.bill = bill
 
     
-    def _purchase_entry(self, bill: dict) -> JournalEntry:
+    def _purchase_entry(self) -> JournalEntry:
         """
         Generate journal entry for a PURCHASE (input bill).
         Standard Indian purchase entry with GST:
@@ -41,19 +43,19 @@ class JournalBuilder:
         Cash A/c or Bank A/c instead of Sundry Creditors.
         """
 
-        taxable     = _safe(bill.get("taxable_amount") or bill.get("subtotal"))
-        cgst        = _safe(bill.get("cgst_amount"))
-        sgst        = _safe(bill.get("sgst_amount"))
-        igst        = _safe(bill.get("igst_amount"))
-        cess        = _safe(bill.get("cess_amount"))
-        other_chg   = _safe(bill.get("other_charges"))
-        round_off   = _safe(bill.get("round_off"))
-        discount    = _safe(bill.get("discount"))
-        grand       = _safe(bill.get("grand_total"))
-        vendor      = bill.get("vendor_name") or "Unknown Vendor"
-        pay_mode    = bill.get("payment_mode")
-        inv_no      = bill.get("invoice_number") or "N/A"
-        entry_date  = parse_indian_date(bill.get("invoice_date"))
+        taxable     = _safe(self.bill.get("taxable_amount") or self.bill.get("subtotal"))
+        cgst        = _safe(self.bill.get("cgst_amount"))
+        sgst        = _safe(self.bill.get("sgst_amount"))
+        igst        = _safe(self.bill.get("igst_amount"))
+        cess        = _safe(self.bill.get("cess_amount"))
+        other_chg   = _safe(self.bill.get("other_charges"))
+        round_off   = _safe(self.bill.get("round_off"))
+        discount    = _safe(self.bill.get("discount"))
+        grand       = _safe(self.bill.get("grand_total"))
+        vendor      = self.bill.get("vendor_name") or "Unknown Vendor"
+        pay_mode    = self.bill.get("payment_mode")
+        inv_no      = self.bill.get("invoice_number") or "N/A"
+        entry_date  = parse_indian_date(self.bill.get("invoice_date"))
 
         if taxable == 0 and grand > 0:
             taxable = round(grand - cgst - sgst - igst - cess - other_chg, 2)
@@ -125,13 +127,13 @@ class JournalBuilder:
             voucher_type=voucher_type,
             narration=narration,
             lines=lines,
-            source_file=bill.get("_source_file", ""),
+            source_file=self.bill.get("_source_file", ""),
             invoice_number=inv_no,
             vendor_name=vendor,
             direction="input",
         )
 
-    def _sales_entry(self, bill: dict) -> JournalEntry:
+    def _sales_entry(self) -> JournalEntry:
         """
         Generate journal entry for a SALE (output bill).
         Standard Indian sales entry with GST:
@@ -144,20 +146,20 @@ class JournalBuilder:
               To Discount Allowed A/c (if Dr side)
         Output GST is a liability — we collect it from the buyer and pay it to govt.
         """
-        taxable     = _safe(bill.get("taxable_amount") or bill.get("subtotal"))
-        cgst        = _safe(bill.get("cgst_amount"))
-        sgst        = _safe(bill.get("sgst_amount"))
-        igst        = _safe(bill.get("igst_amount"))
-        cess        = _safe(bill.get("cess_amount"))
-        other_chg   = _safe(bill.get("other_charges"))
-        round_off   = _safe(bill.get("round_off"))
-        discount    = _safe(bill.get("discount"))
-        grand       = _safe(bill.get("grand_total"))
-        buyer       = bill.get("buyer_name") or "Cash Customer"
-        vendor      = bill.get("vendor_name") or ""
-        pay_mode    = bill.get("payment_mode")
-        inv_no      = bill.get("invoice_number") or "N/A"
-        entry_date  = parse_indian_date(bill.get("invoice_date"))
+        taxable     = _safe(self.bill.get("taxable_amount") or self.bill.get("subtotal"))
+        cgst        = _safe(self.bill.get("cgst_amount"))
+        sgst        = _safe(self.bill.get("sgst_amount"))
+        igst        = _safe(self.bill.get("igst_amount"))
+        cess        = _safe(self.bill.get("cess_amount"))
+        other_chg   = _safe(self.bill.get("other_charges"))
+        round_off   = _safe(self.bill.get("round_off"))
+        discount    = _safe(self.bill.get("discount"))
+        grand       = _safe(self.bill.get("grand_total"))
+        buyer       = self.bill.get("buyer_name") or "Cash Customer"
+        vendor      = self.bill.get("vendor_name") or ""
+        pay_mode    = self.bill.get("payment_mode")
+        inv_no      = self.bill.get("invoice_number") or "N/A"
+        entry_date  = parse_indian_date(self.bill.get("invoice_date"))
 
         if taxable == 0 and grand > 0:
             taxable = round(grand - cgst - sgst - igst - cess - other_chg, 2)
@@ -224,30 +226,30 @@ class JournalBuilder:
             voucher_type=voucher_type,
             narration=narration,
             lines=lines,
-            source_file=bill.get("_source_file", ""),
+            source_file=self.bill.get("_source_file", ""),
             invoice_number=inv_no,
             vendor_name=vendor or buyer,
             direction="output",
         )
 
     
-    def _purchase_return_entry(self, bill: dict) -> JournalEntry:
+    def _purchase_return_entry(self) -> JournalEntry:
         """
         Generate journal entry for a PURCHASE RETURN / DEBIT NOTE.
         Reverse the purchase and input GST amounts, reducing the creditor or bank/cash liability.
         """
-        taxable   = _safe(bill.get("taxable_amount") or bill.get("subtotal"))
-        cgst      = _safe(bill.get("cgst_amount"))
-        sgst      = _safe(bill.get("sgst_amount"))
-        igst      = _safe(bill.get("igst_amount"))
-        cess      = _safe(bill.get("cess_amount"))
-        other_chg = _safe(bill.get("other_charges"))
-        round_off = _safe(bill.get("round_off"))
-        discount  = _safe(bill.get("discount"))
-        grand     = _safe(bill.get("grand_total"))
-        vendor    = bill.get("vendor_name") or "Unknown Vendor"
-        pay_mode  = bill.get("payment_mode")
-        inv_no    = bill.get("invoice_number") or "N/A"
+        taxable   = _safe(self.bill.get("taxable_amount") or self.bill.get("subtotal"))
+        cgst      = _safe(self.bill.get("cgst_amount"))
+        sgst      = _safe(self.bill.get("sgst_amount"))
+        igst      = _safe(self.bill.get("igst_amount"))
+        cess      = _safe(self.bill.get("cess_amount"))
+        other_chg = _safe(self.bill.get("other_charges"))
+        round_off = _safe(self.bill.get("round_off"))
+        discount  = _safe(self.bill.get("discount"))
+        grand     = _safe(self.bill.get("grand_total"))
+        vendor    = self.bill.get("vendor_name") or "Unknown Vendor"
+        pay_mode  = self.bill.get("payment_mode")
+        inv_no    = self.bill.get("invoice_number") or "N/A"
         entry_date = parse_indian_date(bill.get("invoice_date"))
 
         if taxable == 0 and grand > 0:
@@ -296,32 +298,32 @@ class JournalBuilder:
                 f"Invoice No. {inv_no}, dated {entry_date.strftime('%d-%m-%Y')}"
             ),
             lines=lines,
-            source_file=bill.get("_source_file", ""),
+            source_file=self.bill.get("_source_file", ""),
             invoice_number=inv_no,
             vendor_name=vendor,
             direction="input",
         )
 
 
-    def _sales_return_entry(self, bill: dict) -> JournalEntry:
+    def _sales_return_entry(self) -> JournalEntry:
         """
         Generate journal entry for a SALES RETURN / CREDIT NOTE.
         Reverse the sales and output GST liability, reducing the debtor or bank/cash asset.
         """
-        taxable   = _safe(bill.get("taxable_amount") or bill.get("subtotal"))
-        cgst      = _safe(bill.get("cgst_amount"))
-        sgst      = _safe(bill.get("sgst_amount"))
-        igst      = _safe(bill.get("igst_amount"))
-        cess      = _safe(bill.get("cess_amount"))
-        other_chg = _safe(bill.get("other_charges"))
-        round_off = _safe(bill.get("round_off"))
-        discount  = _safe(bill.get("discount"))
-        grand     = _safe(bill.get("grand_total"))
-        buyer     = bill.get("buyer_name") or "Customer"
-        vendor    = bill.get("vendor_name") or buyer
-        pay_mode  = bill.get("payment_mode")
-        inv_no    = bill.get("invoice_number") or "N/A"
-        entry_date = parse_indian_date(bill.get("invoice_date"))
+        taxable   = _safe(self.bill.get("taxable_amount") or self.bill.get("subtotal"))
+        cgst      = _safe(self.bill.get("cgst_amount"))
+        sgst      = _safe(self.bill.get("sgst_amount"))
+        igst      = _safe(self.bill.get("igst_amount"))
+        cess      = _safe(self.bill.get("cess_amount"))
+        other_chg = _safe(self.bill.get("other_charges"))
+        round_off = _safe(self.bill.get("round_off"))
+        discount  = _safe(self.bill.get("discount"))
+        grand     = _safe(self.bill.get("grand_total"))
+        buyer     = self.bill.get("buyer_name") or "Customer"
+        vendor    = self.bill.get("vendor_name") or buyer
+        pay_mode  = self.bill.get("payment_mode")
+        inv_no    = self.bill.get("invoice_number") or "N/A"
+        entry_date = parse_indian_date(self.bill.get("invoice_date"))
 
         if taxable == 0 and grand > 0:
             taxable = round(grand - cgst - sgst - igst - cess - other_chg, 2)
@@ -368,36 +370,36 @@ class JournalBuilder:
                 f"Invoice No. {inv_no}, dated {entry_date.strftime('%d-%m-%Y')}"
             ),
             lines=lines,
-            source_file=bill.get("_source_file", ""),
+            source_file=self.bill.get("_source_file", ""),
             invoice_number=inv_no,
             vendor_name=vendor,
             direction="output",
         )
 
     
-    def to_journal_entry(self, bill: dict) -> Optional[JournalEntry]:
-        if bill.get("_status") != "ok":
+    def to_journal_entry(self) -> Optional[JournalEntry]:
+        if self.bill.get("_status") != "ok":
             return None
 
-        grand = _safe(bill.get("grand_total"))
+        grand = _safe(self.bill.get("grand_total"))
         if grand <= 0:
             return None
 
-        direction = bill.get("_direction", "input")
-        return_type = bill.get("return_type")
+        direction = self.bill.get("_direction", "input")
+        return_type = self.bill.get("return_type")
 
         try:
             if return_type == "credit_note":
-                return self._sales_return_entry(bill)
+                return self._sales_return_entry()
             if return_type == "debit_note":
-                return self._purchase_return_entry(bill)
+                return self._purchase_return_entry()
             if direction == "output":
-                return self._sales_entry(bill)
+                return self._sales_entry()
             else:
-                return self._purchase_entry(bill)
+                return self._purchase_entry()
         except Exception as e:
             # Log but don't crash — return None so caller can skip
-            print(f"  [journal] WARNING: Could not create entry for {bill.get('_source_file', '?')}: {e}")
+            print(f"  [journal] WARNING: Could not create entry for {self.bill.get('_source_file', '?')}: {e}")
             return None
 
 

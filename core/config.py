@@ -168,9 +168,6 @@ class Config(BaseSettings):
             raise ValueError(f"Invalid environment configuration: {exc}") from exc
 
 
-# settings = Settings.from_env()
-
-
 def ensure_database_exists(sync_uri: str) -> None:
     """
     Checks if the PostgreSQL database exists. If not, it creates the database.
@@ -192,6 +189,4 @@ def ensure_database_exists(sync_uri: str) -> None:
 
     except Exception as e:
         logging.error(f"Failed to check or create database: {e}")
-
-# ensure_database_exists(settings.SQLALCHEMY_SYNC_DATABASE_URI)
 

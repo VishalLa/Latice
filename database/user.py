@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import DateTime, String, Column
+from sqlalchemy import DateTime, String, Integer
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,6 +17,12 @@ class UserRole(str, enum.Enum):
     ADMIN = "admin"   
     USER = "user"     
 
+
+class UserStatus(str, enum.Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
 class User(Base):
     __tablename__ = "user"
 
@@ -24,6 +30,19 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     email: Mapped[Optional[str]] = mapped_column(String(255))
     password_hash: Mapped[str] = mapped_column(String(240), nullable=False)
+
+    first_name: Mapped[str] = mapped_column(String(36), nullable=False)
+    last_name: Mapped[Optional[str]] = mapped_column(String(36))
+    phone_no: Mapped[str] = mapped_column(String(15), nullable=False)
+    address: Mapped[Optional[str]] = mapped_column(String(255))
+    
+    status: Mapped[UserStatus] = mapped_column(
+        SAEnum(UserStatus, values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+        default=UserStatus.ACTIVE,
+        server_default=UserStatus.ACTIVE.value,
+    )
+    last_login: Mapped[Optional[int]] = mapped_column(Integer)
 
     role: Mapped[UserRole] = mapped_column(
         SAEnum(UserRole, values_callable=lambda e: [m.value for m in e]),

@@ -59,7 +59,7 @@ class LedgerFormatModel(Base):
     vendor_name: Mapped[Optional[str]] = mapped_column(String(255))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    run: Mapped[Optional["ReconciliationRunModel"]] = relationship(back_populates="ledger_records")
+    run: Mapped[Optional["ReconciliationRunModel"]] = relationship(back_populates="ledger_format_entries")
     match_results: Mapped[List["MatchResultModel"]] = relationship(back_populates="ledger_format")
 
     @property
@@ -158,7 +158,7 @@ class ReconciliationRunModel(Base):
 
     match_results: Mapped[List["MatchResultModel"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     bank_statements: Mapped[List["BankStatementModel"]] = relationship(back_populates="run")
-    ledger_records: Mapped[List["LedgerFormatModel"]] = relationship(back_populates="run")
+    ledger_format_entries: Mapped[List["LedgerFormatModel"]] = relationship(back_populates="run")
 
 
 class MatchResultModel(Base):

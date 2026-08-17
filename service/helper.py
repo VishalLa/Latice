@@ -21,6 +21,13 @@ def _log_db_errors(action: str):
     return decorator
 
 
+def _safe_float(v: Any) -> Optional[float]:
+    try:
+        return float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _coerce_date(value: Any) -> Optional[date]:
     if value is None or isinstance(value, date):
         return value
@@ -46,4 +53,9 @@ def _coerce_row_dates(
         if f in out:
             out[f] = _coerce_date(out[f])
     return out
+
+
+def fy_label_for_date(d: date) -> str:
+    year = d.year if d.month >= 4 else d.year - 1
+    return f"{year}-{str(year+1)[-2:]}"
 

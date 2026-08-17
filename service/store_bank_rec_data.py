@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from typing import List, Dict, Any, Optional
-from datetime import date, datetime
 
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import SQLAlchemyError
 
 from database import (
     DatabaseManager,
-
+    
     LedgerSource,
     LedgerFormatModel,
     BankStatementModel,
@@ -16,15 +14,40 @@ from database import (
     AuditInvestigationItemModel,
     MatchPatternModel,
     MatchResultModel,
-    ReconciliationRunModel
+    ReconciliationRunModel,
 )
 
-from .helper import _coerce_date, _coerce_row_dates, _log_db_errors
+from .helper import _log_db_errors, _coerce_date, _coerce_row_dates
 
 
 class PushBankRecData:
+    """
+    Writes bank-reconciliation data to the database.
 
-    def __init__(self, db_manager: DatabaseManager) -> None:
+    The class is constructed once with a `DatabaseManager` (see
+    session.py), which owns the dedicated db thread and its SQLAlchemy
+    Session factory. `__init__` stores that manager on the instance so
+    callers no longer pass a `Session` into every method -- each method
+    builds its own small `fn(session)` closure internally and hands it to
+    `self.db_manager.run(...)`, which is what actually opens the session,
+    runs the work on the db thread, and commits/rolls back.
+
+    Usage:
+
+        db_manager = DatabaseManager(db_url)
+        pusher = PushBankRecData(db_manager)
+
+        run = pusher.create_run(bank_name="HDFC", template_version="v1")
+        pusher.push_ledgers(ledgers_data=rows, run_id=run.id)
+        pusher.push_bank_statements(statements_data=statements, run_id=run.id)
+
+    A single `PushBankRecData` instance is safe to reuse (and share)
+    across as many calls/threads as you like -- the underlying
+    `DatabaseManager` is what serializes actual db work onto its worker
+    thread.
+    """
+
+    def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
 
 
@@ -37,8 +60,8 @@ class PushBankRecData:
         ledger_source: Optional[str] = None,
         bank_csv_path: Optional[str] = None,
         ledger_csv_path: Optional[str] = None,
-    ) -> ReconciliationRunModel:
-
+    ) -> ReconciliationRunModel: 
+        
         def _op(session: Session) -> ReconciliationRunModel:
             run = ReconciliationRunModel(
                 celery_task_id=celery_task_id,
@@ -48,20 +71,19 @@ class PushBankRecData:
                 bank_csv_path=bank_csv_path,
                 ledger_csv_path=ledger_csv_path,
             )
-
+            
             session.add(run)
             session.flush()
-            session.refresh(run)
-
+            session.refresh(run, attribute_names=["run_at"])
             return run
 
         return self.db_manager.run(_op)
 
-    
+
     @_log_db_errors("updating run summary")
     def update_run_summary(
-        self,
-        run_id: int,
+        self, 
+        run_id: int, 
         summary: Dict[str, Any]
     ) -> bool:
         
@@ -80,11 +102,11 @@ class PushBankRecData:
                 "unreconciled_ledger",
                 "unreconciled_bank",
             )
-
+            
             for column_name in column_names:
                 if column_name in summary and summary[column_name] is not None:
                     setattr(run, column_name, summary[column_name])
-                
+
             return True
 
         return self.db_manager.run(_op)
@@ -110,20 +132,21 @@ class PushBankRecData:
 
     @_log_db_errors("inserting ledgers")
     def push_ledgers(
-        self,
-        ledger_data: List[Dict[str, Any]],
+        self, 
+        ledgers_data: List[Dict[str, Any]], 
         run_id: Optional[int] = None
     ) -> bool:
         
         def _op(session: Session) -> bool:
             db_ledgers = []
-            for data in ledger_data:
+            
+            for data in ledgers_data:
                 if "source" in data and isinstance(data["source"], str):
                     data["source"] = LedgerSource(data["source"])
-                
+                    
                 data = _coerce_row_dates(data, ["transaction_date"])
                 db_ledgers.append(LedgerFormatModel(**{**data, "run_id": run_id}))
-            
+
             session.add_all(db_ledgers)
             return True
 
@@ -137,7 +160,7 @@ class PushBankRecData:
         ledgers_data: List[Dict[str, Any]],
         run_id: Optional[int] = None,
     ) -> bool:
-
+        
         def _op(session: Session) -> bool:
             db_statements = [
                 BankStatementModel(**{**_coerce_row_dates(data, ["date"]), "run_id": run_id})
@@ -148,13 +171,15 @@ class PushBankRecData:
             for data in ledgers_data:
                 if "source" in data and isinstance(data["source"], str):
                     data["source"] = LedgerSource(data["source"])
-
+                    
                 data = _coerce_row_dates(data, ["transaction_date"])
                 db_ledgers.append(LedgerFormatModel(**{**data, "run_id": run_id}))
 
             session.add_all(db_statements)
             session.add_all(db_ledgers)
             return True
+
+        return self.db_manager.run(_op)
 
 
     @_log_db_errors("inserting match results")
@@ -187,7 +212,7 @@ class PushBankRecData:
         split_matches = split_matches or []
         suggested_journal_entries = suggested_journal_entries or []
         other_matches = other_matches or []
-
+        
         if not (timing_matches or split_matches or suggested_journal_entries or other_matches):
             return True
 
@@ -214,7 +239,7 @@ class PushBankRecData:
                 fk = ledger_lookup.get(business_key)
                 if fk is None:
                     unresolved.append(f"ledger_id={business_key!r}")
-                
+
                 return fk
 
             def resolve_bank(business_key: Any) -> Optional[int]:
@@ -236,11 +261,11 @@ class PushBankRecData:
             db_rows: List[MatchResultModel] = []
 
             def base_row(
-                m: Dict[str, Any],
-                match_type: str,
-                ledger_fk,
-                bank_fk,
-                amount,
+                m: Dict[str, Any], 
+                match_type: str, 
+                ledger_fk, 
+                bank_fk, 
+                amount, 
                 details
             ) -> MatchResultModel:
                 return MatchResultModel(
@@ -271,25 +296,25 @@ class PushBankRecData:
                             base_row(
                                 m=m, 
                                 match_type=match_type, 
-                                ledger_fk=resolve_ledger(comp.get("ledger_id")), 
+                                ledger_fk=resolve_ledger(comp.get("ledger_id")),
                                 bank_fk=bank_fk,
                                 amount=comp.get("amount"), 
-                                details=details
+                                details=details,
                             )
                         )
                     return
-                
+
                 if "bank_components" in m:
                     ledger_fk = resolve_ledger(raw_ledger_id)
                     for comp in m["bank_components"]:
                         db_rows.append(
                             base_row(
-                                m=m,
-                                match_type=match_type,
-                                ledger_fk=ledger_fk,
+                                m=m, 
+                                match_type=match_type, 
+                                ledger_fk=ledger_fk, 
                                 bank_fk=resolve_bank(comp.get("bank_id")),
-                                amount=comp.get("amount"),
-                                details=details
+                                amount=comp.get("amount"), 
+                                details=details,
                             )
                         )
                     return
@@ -349,7 +374,7 @@ class PushBankRecData:
                         details=narrative,
                     )
                 )
-            
+
             session.add_all(db_rows)
 
             if unresolved:
@@ -395,7 +420,7 @@ class PushBankRecData:
             return True
 
         return self.db_manager.run(_op)
-                    
+
 
     @_log_db_errors("inserting complete reconciliation results")
     def push_reconciliation_results(

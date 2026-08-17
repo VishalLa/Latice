@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import re
 import json
+from datetime import  datetime
 from typing import List, Dict, Any, Optional, Tuple, Union
 
 from pydantic import BaseModel
 from langchain_ollama import ChatOllama
 from langchain_core.output_parsers import JsonOutputParser
 
+from core.config import Config
 from schema import LedgerFormat, BankStatement
 from core.config import Config
 
@@ -16,19 +18,23 @@ MAX_CANDIDATES: int = 12
 # Shared LLM instance
 _SHARED_LLM: Optional[ChatOllama] = None
 
-def _prepare_llm(config: Config) -> ChatOllama:
-    return ChatOllama(
-        model=config.OLLAMA_NAME,
-        temperature=0.0,
-        num_ctx=8129,
-        repeat_penalty=1.1,
-        base_url=config.OLLAMA_URL
-    )
+def _prepare_llm(config: Config) -> Optional[ChatOllama]:
+    try:
+        return ChatOllama(
+            model=config.OLLAMA_NAME,
+            temperature=0.0,
+            num_ctx=8129,
+            repeat_penalty=1.1,
+            base_url=config.OLLAMA_URL
+        )
+    except Exception as e:
+        print(f"Error while creating instance of ChatOllama: {e}")
+        return None
 
-def get_shared_llm() -> ChatOllama:
+def get_shared_llm(config: Config) -> ChatOllama:
     global _SHARED_LLM
     if _SHARED_LLM is None:
-        _SHARED_LLM = _prepare_llm()
+        _SHARED_LLM = _prepare_llm(config=config)
     return _SHARED_LLM
 
 def reset_shared_llm() -> None:
@@ -80,7 +86,7 @@ def _format_record_for_prompt(
     cr_key = "credit_amount"
     id_key = "row_id"    if is_bank else "ledger_id"
     dt_key = "date"      if is_bank else "transaction_date"
-    nu_key = "narration" if is_bank else "account_name"
+    nm_key = "narration" if is_bank else "account_name"
 
     return (
         f"- {rec.get(id_key, 'N/A')} | "
@@ -190,7 +196,7 @@ def _passes_many_to_one_bouncer(
     gl_total = 0.0
 
     for gl in gl_items:
-        gl_amt, gl_dir = _get_gl_direction_amount(gl)
+        gl_amt, gl_dir = _get_direction_amount(gl)
         if not _directions_compatible(gl_dir, bk_dir, same_side):
             return False, (
                 f"Direction mismatch on {gl.ledger_id}: "

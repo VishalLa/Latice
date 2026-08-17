@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.prompts import ChatPromptTemplate
 
+from core.config import Config
 from schema import BankStatement, LedgerFormat, DraftAccountSuggestion
 
 from .helper import (
@@ -434,7 +435,7 @@ def _generate_journal_drafts(
 
     using_shared = llm is None
     if using_shared:
-        llm = get_shared_llm()
+        llm = get_shared_llm(config=Config.from_env())
 
     llm_available = True
     skip_reason: Optional[str] = None

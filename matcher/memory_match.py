@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Protocol
+from typing import Dict, List, Optional, Protocol, Tuple
 
 from schema import RecognizedPattern
 
@@ -69,7 +69,7 @@ class SQLAlchemyBackend:
     def _get_model_cls(self):
         if self._model_cls is not None:
             return self._model_cls
-        from database.bank_renc_model import MatchPatternModel
+        from database import MatchPatternModel
         self._model_cls = MatchPatternModel
         return self._model_cls
 

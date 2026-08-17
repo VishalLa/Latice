@@ -148,9 +148,12 @@ class Config(BaseSettings):
         )
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> "Config":
         try:
-            return cls()
+            return cls(
+                SECRET_KEY=os.environ.get("SECRET_KEY", ""),
+                JWT_SECRET_KEY=os.environ.get("JWT_SECRET_KEY", "")
+            )
         except ValidationError as exc:
             missing = [
                 err["loc"][0]

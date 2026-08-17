@@ -8,6 +8,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 
 from schema import BankStatement, LedgerFormat, AIWindowOutput, AIManyToOneOutput
+from core.config import  Config
 from .ai_utils import (
     get_shared_llm,
     reset_shared_llm,
@@ -39,12 +40,13 @@ class AIMatcher:
 
     def __init__(
         self,
+        config: Config,
         llm: Optional[ChatOllama] = None,
         tol: float = 0.50,
         same_side: bool = True,
     ) -> None:
         self._owns_shared_llm = llm is None
-        self.llm = llm or get_shared_llm()
+        self.llm = llm or get_shared_llm(config)
         self.tol = tol
         self.same_side = same_side
 
@@ -364,11 +366,12 @@ class AIMatcher:
 
 
 def ai_matcher(
+    config: Config,
     result: Dict[str, Any],
     tol: float = 0.50,
     same_side: bool = True,
     llm: Optional[ChatOllama] = None,
 ) -> Dict[str, Any]:
-    matcher = AIMatcher(llm=llm, tol=tol, same_side=same_side)
+    matcher = AIMatcher(llm=llm, tol=tol, same_side=same_side, config=config)
     return matcher.run(result)
 

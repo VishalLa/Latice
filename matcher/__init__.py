@@ -8,6 +8,8 @@ from .same_side_detect import detect_same_side
 from .memory_match import memory_matcher, MatchMemory
 from .residual_reconciler import reconcile_residuals
 
+from core.config import  Config
+
 from langchain_ollama import ChatOllama
 
 TOLERANCES = {
@@ -117,6 +119,7 @@ def reconcile(
     }
 
     ai_pipeline_output = ai_matcher(
+        config=Config.from_env(),
         result=ai_input_payload,
         tol=TOLERANCES.get("AI_MATCHER", 5.0),
         same_side=same_side,
@@ -125,22 +128,22 @@ def reconcile(
     ai_matcher_result = ai_pipeline_output["FINAL_RESULT"]
 
     combined_ai_matches = (
-        ai_result.get("AI_MATCHES",      []) +
-        ai_result.get("AI_MANY_MATCHES", [])
+        ai_matcher_result.get("AI_MATCHES",      []) +
+        ai_matcher_result.get("AI_MANY_MATCHES", [])
     )
 
-    ai_audit_queue = ai_result.get("AUDIT_QUEUE", [])
+    ai_audit_queue = ai_matcher_result.get("AUDIT_QUEUE", [])
 
     final_unreconciled = {
-        "ledger": ai_result.get("FINAL_RESIDUALS_LEDGER", []),
-        "bank":   ai_result.get("FINAL_RESIDUALS_BANK",   []),
+        "ledger": ai_matcher_result.get("FINAL_RESIDUALS_LEDGER", []),
+        "bank":   ai_matcher_result.get("FINAL_RESIDUALS_BANK",   []),
     }
 
-    ai_skipped = ai_result.get("ai_skipped", False)
+    ai_skipped = ai_matcher_result.get("ai_skipped", False)
     if ai_skipped:
         all_warnings.append(
             f"AI matcher unavailable and was skipped: "
-            f"{ai_result.get('ai_skip_reason', 'unknown error')}. "
+            f"{ai_matcher_result.get('ai_skip_reason', 'unknown error')}. "
             f"Residual records require manual review."
         )
 

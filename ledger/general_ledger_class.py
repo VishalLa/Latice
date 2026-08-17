@@ -47,7 +47,7 @@ class GeneralLedger:
                     particulars = f"By {opposite}"
 
                 ledger_acc.post(
-                    date_        = entry.date,
+                    date         = entry.date,
                     particulars  = particulars,
                     journal_id   = entry.entry_id,
                     voucher_type = entry.voucher_type,

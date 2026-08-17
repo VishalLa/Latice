@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import re
 import itertools
-from datetime import date as _date
 from typing import Any, Callable, List, Optional
 
 from schema import BankStatement, LedgerFormat, IgnoredMetadataRecord, AuditInvestigationItem
@@ -16,11 +14,9 @@ from .helper import (
     _get_amt,
     _get_date,
     _amounts_equal,
-    _to_date,
     _days_between,
     _crosses_month_boundary,
 
-    extract_utr,
     text_similarity,
     is_transposition,
 )
@@ -37,7 +33,7 @@ class FuzzyMatcher:
         pending_ledger: List[LedgerFormat],
         pending_bank:   List[BankStatement],
         same_side:      bool = True,
-        tolerances:     dict = None,
+        tolerances:     dict[str, float | int] = None,
     ) -> None:
         self.ledger_pool:   List[LedgerFormat]  = list(pending_ledger)
         self.bank_pool:     List[BankStatement] = list(pending_bank)

@@ -51,7 +51,7 @@ class PushBankRecData:
 
             session.add(run)
             session.flush()
-            session.refresh()
+            session.refresh(run)
 
             return run
 
@@ -66,7 +66,7 @@ class PushBankRecData:
     ) -> bool:
         
         def _op(session: Session) -> bool:
-            run = session.query(ReconciliationRunModel).filter_by(id=run).first()
+            run = session.query(ReconciliationRunModel).filter_by(id=run_id).first()
             if run is None:
                 print(f"update_run_summary: no run found for run_id={run_id}")
                 return False
@@ -85,9 +85,9 @@ class PushBankRecData:
                 if column_name in summary and summary[column_name] is not None:
                     setattr(run, column_name, summary[column_name])
                 
-                return True
+            return True
 
-            return self.db_manager.run(_op)
+        return self.db_manager.run(_op)
 
 
     @_log_db_errors("inserting bank statements")
@@ -350,7 +350,7 @@ class PushBankRecData:
                     )
                 )
             
-            ession.add_all(db_rows)
+            session.add_all(db_rows)
 
             if unresolved:
                 print(

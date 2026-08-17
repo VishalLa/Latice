@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from .fuzzy_match import fuzzy_matcher
 from .exact_match import exact_match
@@ -8,7 +8,7 @@ from .same_side_detect import detect_same_side
 from .memory_match import memory_matcher, MatchMemory
 from .residual_reconciler import reconcile_residuals
 
-from core.config import  Config
+from core.config import Config
 
 from langchain_ollama import ChatOllama
 
@@ -61,6 +61,7 @@ def _quality_summary(all_matches: list) -> dict:
 
 
 def reconcile(
+    config: Config,
     ledger_result: dict,
     bank_result: dict,
     all_warnings: list,
@@ -119,7 +120,7 @@ def reconcile(
     }
 
     ai_pipeline_output = ai_matcher(
-        config=Config.from_env(),
+        config=config,
         result=ai_input_payload,
         tol=TOLERANCES.get("AI_MATCHER", 5.0),
         same_side=same_side,

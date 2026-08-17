@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,7 +20,7 @@ from schema import (
 
 from .helper import _log_db_errors
 
-class RunResult:
+class RunResultBankRec:
     
     def __init__(self, db_manager: DatabaseManager) -> None:
         self.db_manager = db_manager
@@ -77,9 +79,9 @@ class RunResult:
             values: set[str] = set()
             for item in raw:
                 if isinstance(item, dict):
-                    values.update(RunResult._split_match_ids(item.get("ledger_id") or item.get("bank_id")))
+                    values.update(RunResultBankRec._split_match_ids(item.get("ledger_id") or item.get("bank_id")))
                 else:
-                    values.update(RunResult._split_match_ids(item))
+                    values.update(RunResultBankRec._split_match_ids(item))
             return values
 
         text = str(raw).strip()
@@ -91,6 +93,16 @@ class RunResult:
             for part in text.split("&") 
             if part.strip()
         }
+        
+    
+    @staticmethod
+    def _report_filename(run_id: str) -> str:
+        return f"bank-recon-{run_id}.xlsx"
+    
+    def _report_path(self, run_id: str) -> str:
+        from core.config import Config
+        return os.path.join(Config().from_env().STORAGE_DIR, self._report_filename(run_id))
+    
         
     
     @_log_db_errors("finding internal run record")
@@ -339,27 +351,62 @@ class RunResult:
         return self.db_manager.run(_op)
     
     
-    @_log_db_errors("fetching run bundle")
-    def fetch_run_bundle(
-        self, 
-        run_id: str, 
+    @_log_db_errors("getting run result for celery")
+    def get_data_from_db(
+        self,
+        run_id: str,
         user_id: Optional[str] = None
-    ) -> Optional[Tuple[Dict[str, Any], List[SchemaLedger], List[SchemaBank]]]:
-        """
-        Full reconstruction of a run's reconciliation payload — matches, ledger
-        rows, bank rows. Returns None if the run isn't found.
-        """
-        def _op(session: Session) -> Optional[Tuple[Dict[str, Any], List[SchemaLedger], List[SchemaBank]]]:
+    ) -> Dict[str, Any]:
+        
+        def _op(session: Session) -> Optional[Dict[str, Any]]:
+            recon_result, _, _ = self._fetch_run_bundle_internal(
+                session=session,
+                run_id=run_id,
+                user_id=user_id
+            )
+            return recon_result
+        
+        fetched = self.db_manager.run(_op)
+        if fetched is None:
+            return {
+                "status": "error", 
+                "message": "Reconciliation run not found or unauthorized."
+            }
+        return fetched
+    
+    
+    @_log_db_errors("generating report for celery")
+    def generate_report_from_db(
+        self,
+        run_id: str,
+        user_id: Optional[str] = None
+    ):
+        def _op(session: Session) -> dict:
             return self._fetch_run_bundle_internal(
-                session=session, 
-                run_id=run_id, 
+                session=session,
+                run_id=run_id,
                 user_id=user_id
             )
         
-        return self.db_manager.run(_op)
+        fetched = self.db_manager.run(_op)
+        if fetched is None:
+            return {
+                "status": "error", 
+                "message": "Reconciliation run not found or unauthorized."
+            }
+            
+        out_path = self._report_path(run_id)
+        recon_result, gl_objs, bank_objs = fetched
+        # write_bank_recon_xlsx(recon_result, gl_objs, bank_objs, out_path)
+        return {
+            "status": "success",
+            "run_id": run_id,
+            "file": self._report_filename(run_id),
+            "path": out_path,
+        }
+
     
-    
-    @_log_db_errors("getting run result")
+    @_log_db_errors("getting run result for api no celery")
     def get_run_result(
         self, 
         run_id: str, 

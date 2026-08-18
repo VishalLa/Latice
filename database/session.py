@@ -23,6 +23,7 @@ from core.config import Config
 from .base import Base
 
 from . import user
+from . import auth_model
 from . import bank_rec_model
 from . import ledger_tax_models
 from . import period_model

@@ -56,12 +56,7 @@ class Config(BaseSettings):
     BILL_UPLOAD_FOLDER: str = "/data/uploads"
     STORAGE_DIR: str = _default_storage_dir()
 
-    # celery queue
-    QUEUE_DISPATCH: str = "queue_dispatch"        # run_reconciliation_pipeline
-    QUEUE_PREPROCESS: str = "queue_preprocess"    # process_pre_data
-    QUEUE_RECONCILE: str = "queue_reconcile"      # run_matching
-    QUEUE_POSTPROCESS: str = "queue_postprocess"  # finalize_reconciliation
-    QUEUE_BILL_LEDGER: str = "queue_bil_ledger"
+    REDIS_URL: str
 
     LOG_FILE: str = "debug.log"
     LOG_FORMAT: str = "%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s"

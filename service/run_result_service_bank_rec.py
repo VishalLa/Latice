@@ -17,13 +17,15 @@ from schema import (
     LedgerFormat as SchemaLedger,
     BankStatement as SchemaBank
 )
+from ._base import Base
 from .reports.bank_recon_xlsx import write_bank_recon_xlsx
 from .helper import _log_db_errors
 
-class RunResultBankRec:
+class ResultBankRec:
     
-    def __init__(self, db_manager: DatabaseManager) -> None:
-        self.db_manager = db_manager
+    def __init__(self, db_manager: Optional[DatabaseManager] = None) -> None:
+        base = Base(db_manager)
+        self.db_manager = base.get_manager
     
     
     @staticmethod
@@ -79,9 +81,9 @@ class RunResultBankRec:
             values: set[str] = set()
             for item in raw:
                 if isinstance(item, dict):
-                    values.update(RunResultBankRec._split_match_ids(item.get("ledger_id") or item.get("bank_id")))
+                    values.update(ResultBankRec._split_match_ids(item.get("ledger_id") or item.get("bank_id")))
                 else:
-                    values.update(RunResultBankRec._split_match_ids(item))
+                    values.update(ResultBankRec._split_match_ids(item))
             return values
 
         text = str(raw).strip()
@@ -106,8 +108,8 @@ class RunResultBankRec:
         
     
     @_log_db_errors("finding internal run record")
+    @staticmethod
     def _find_run_internal(
-        self, 
         session: Session, 
         run_id: str, 
         user_id: Optional[str] = None
@@ -154,8 +156,8 @@ class RunResultBankRec:
     
     
     @_log_db_errors("building match results")
+    @staticmethod
     def _build_matches(
-        self, 
         run: ReconciliationRunModel
     ) -> List[Dict[str, Any]]:
         matches: List[Dict[str, Any]] = []
@@ -177,8 +179,8 @@ class RunResultBankRec:
     
     
     @_log_db_errors("building ledger objects")
+    @staticmethod
     def _build_ledger_objs(
-        self, 
         session: Session, 
         run: ReconciliationRunModel
     ) -> List[SchemaLedger]:
@@ -204,8 +206,8 @@ class RunResultBankRec:
     
     
     @_log_db_errors("building bank objects")
+    @staticmethod
     def _build_bank_objs(
-        self, 
         session: Session, 
         run: ReconciliationRunModel
     ) -> List[SchemaBank]:
@@ -229,14 +231,14 @@ class RunResultBankRec:
     
     
     @_log_db_errors("fetching internal run bundle")
+    @staticmethod
     def _fetch_run_bundle_internal(
-        self, 
         session: Session, 
         run_id: str, 
         user_id: Optional[str] = None
     ) -> Optional[Tuple[Dict[str, Any], List[SchemaLedger], List[SchemaBank]]]:
         
-        run = self._find_run_internal(
+        run = ResultBankRec._find_run_internal(
             session=session, 
             run_id=run_id, 
             user_id=user_id
@@ -244,12 +246,12 @@ class RunResultBankRec:
         if run is None:
             return None
 
-        matches = self._build_matches(run=run)
-        gl_objs = self._build_ledger_objs(
+        matches = ResultBankRec._build_matches(run=run)
+        gl_objs = ResultBankRec._build_ledger_objs(
             session=session, 
             run=run
         )
-        bank_objs = self._build_bank_objs(
+        bank_objs = ResultBankRec._build_bank_objs(
             session=session, 
             run=run
         )
@@ -259,10 +261,10 @@ class RunResultBankRec:
         
         for match in matches:
             matched_ledger_ids.update(
-                self._split_match_ids(raw=match.get("ledger_id"))
+                ResultBankRec._split_match_ids(raw=match.get("ledger_id"))
             )
             matched_bank_ids.update(
-                self._split_match_ids(raw=match.get("bank_id"))
+                ResultBankRec._split_match_ids(raw=match.get("bank_id"))
             )
 
         unreconciled_gl_objs = [

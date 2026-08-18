@@ -9,43 +9,17 @@ from sqlalchemy.orm import Session
 
 from matcher import reconcile
 from ledger import TDSEngine, GSTR1Builder, JournalBuilder
-from database import DatabaseManager, BillModel
+from database import BillModel
 
 from entry_point.loader import load_bank_statement, load_ledger
 from entry_point.data_extractor import classify_direction, detect_type, parse_invoice
 from entry_point.ocr import Block, get_ocr
 
-from core.config import Config
-
 from .store_bank_rec_data import PushBankRecData
 from .store_ledger_data import PushLedgerData
 from .reports.bank_recon_xlsx import write_bank_recon_xlsx
 from .helper import _safe_float, fy_label_for_date
-
-
-class Base:
-    def __init__(
-        self, 
-        db_manager: Optional[DatabaseManager] = None
-    ) -> None:
-        self.config = Config.from_env()
-        if db_manager:
-            self.db_manager = db_manager
-        else:
-            self.db_manager = DatabaseManager(
-                db_url=self.config.DATABASE_URL,
-                echo=True,
-                pool_workers=self.config.POOL_WORKERS,
-            )
-    
-    @property
-    def get_manager(self) -> DatabaseManager:
-        return self.db_manager
-    
-    @property
-    def get_config(self) -> Config:
-        return self.config
-
+from ._base import Base
 
 class RunBankRec:
     
@@ -139,8 +113,8 @@ class RunBankRec:
     
     def process_pre_data(
         self,
-        statements_data: list,
-        ledgers_data: list,
+        statements_data: List[Dict[str, Any]],
+        ledgers_data: List[Dict[str, Any]],
     ) -> Dict[str, str]:
         success = self.bank_rec_service.push_all_data(
             statements_data=statements_data,
@@ -151,9 +125,9 @@ class RunBankRec:
     
     def process_post_data(
         self, 
-        matches_data: list, 
-        ignored_data: list, 
-        audit_data: list
+        matches_data: List[Dict[str, Any]], 
+        ignored_data: List[Dict[str, Any]], 
+        audit_data: List[Dict[str, Any]]
     ) -> Dict[str, str]:
         success = self.bank_rec_service.push_reconciliation_results(
             matches_data=matches_data,
@@ -315,10 +289,10 @@ class RunBankRec:
 
 class RunBill:
     def __init__(self) -> None:
-            base = Base()
-            self.db_manager = base.get_manager
-            self.config = base.config
-            self.ledger_service = PushLedgerData(db_manager=self.db_manager)
+        base = Base()
+        self.db_manager = base.get_manager
+        self.config = base.config
+        self.ledger_service = PushLedgerData(db_manager=self.db_manager)
         
     
     @staticmethod

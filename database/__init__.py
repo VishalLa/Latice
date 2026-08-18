@@ -12,6 +12,8 @@ from .security import (
 
 from .user import User, UserRole, UserStatus
 
+from .auth_model import RevokedTokenModel
+
 from .bank_rec_model import (
     LedgerSource,
     LedgerFormatModel,
@@ -54,6 +56,7 @@ __all__ = [
     "User",
     "UserRole",
     "UserStatus",
+    "RevokedTokenModel",
 
     # bank reconciliation
     "LedgerSource",

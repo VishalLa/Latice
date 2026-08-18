@@ -33,7 +33,7 @@ class PeriodAlreadyClosedError(Exception):
     pass
 
 
-class RebuildService:
+class RebuildServiceLedger:
     """
     Rebuilds domain objects (JournalEntry, TDSEntry) from their persisted
     SQLAlchemy models, and closes accounting periods.
@@ -69,7 +69,10 @@ class RebuildService:
     def rebuild_journal_entry(model: JournalEntryModel) -> JournalEntry:
         lines = [
             EntryLine(
-                account=Account(name=l.account_name, group=RebuildService._account_group_from_value(l.account_group)),
+                account=Account(
+                    name=l.account_name, 
+                    group=RebuildServiceLedger._account_group_from_value(l.account_group)
+                ),
                 dr_cr=DrCr(l.dr_cr),
                 amount=l.amount,
                 narration=l.narration or "",
@@ -90,9 +93,12 @@ class RebuildService:
 
 
     @staticmethod
-    def rebuild_journal_entries(models: List[JournalEntryModel]) -> List[JournalEntry]:
+    def rebuild_journal_entries(
+        models: List[JournalEntryModel]
+    ) -> List[JournalEntry]:
         return sorted(
-            (RebuildService.rebuild_journal_entry(m) for m in models), key=lambda e: e.date
+            (RebuildServiceLedger.rebuild_journal_entry(m) for m in models), 
+            key=lambda e: e.date
         )
 
 
@@ -128,7 +134,8 @@ class RebuildService:
         period_end: date_,
     ) -> TDSRegister:
         entries = [
-            RebuildService.rebuild_tds_entry(m) for m in models
+            RebuildServiceLedger.rebuild_tds_entry(m) 
+            for m in models
         ]
         return TDSRegister(
             entries=entries,

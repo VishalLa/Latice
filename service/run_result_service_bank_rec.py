@@ -17,7 +17,7 @@ from schema import (
     LedgerFormat as SchemaLedger,
     BankStatement as SchemaBank
 )
-
+from .reports.bank_recon_xlsx import write_bank_recon_xlsx
 from .helper import _log_db_errors
 
 class RunResultBankRec:
@@ -397,7 +397,7 @@ class RunResultBankRec:
             
         out_path = self._report_path(run_id)
         recon_result, gl_objs, bank_objs = fetched
-        # write_bank_recon_xlsx(recon_result, gl_objs, bank_objs, out_path)
+        write_bank_recon_xlsx(recon_result, gl_objs, bank_objs, out_path)
         return {
             "status": "success",
             "run_id": run_id,

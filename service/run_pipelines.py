@@ -2,19 +2,25 @@ from __future__ import annotations
 
 import os
 import dataclasses
-from typing import Optional, Any, List
+from datetime import date as date_
+from typing import Optional, Any, List, Dict
+
+from sqlalchemy.orm import Session
 
 from matcher import reconcile
-from database import DatabaseManager
+from ledger import TDSEngine, GSTR1Builder, JournalBuilder
+from database import DatabaseManager, BillModel
+
 from entry_point.loader import load_bank_statement, load_ledger
 from entry_point.data_extractor import classify_direction, detect_type, parse_invoice
 from entry_point.ocr import Block, get_ocr
+
 from core.config import Config
 
 from .store_bank_rec_data import PushBankRecData
 from .store_ledger_data import PushLedgerData
 from .reports.bank_recon_xlsx import write_bank_recon_xlsx
-from .helper import _safe_float
+from .helper import _safe_float, fy_label_for_date
 
 
 class Base:
@@ -135,7 +141,7 @@ class RunBankRec:
         self,
         statements_data: list,
         ledgers_data: list,
-    ) -> dict:
+    ) -> Dict[str, str]:
         success = self.bank_rec_service.push_all_data(
             statements_data=statements_data,
             ledgers_data=ledgers_data,
@@ -148,7 +154,7 @@ class RunBankRec:
         matches_data: list, 
         ignored_data: list, 
         audit_data: list
-    ) -> dict:
+    ) -> Dict[str, str]:
         success = self.bank_rec_service.push_reconciliation_results(
             matches_data=matches_data,
             ignored_data=ignored_data,
@@ -163,7 +169,7 @@ class RunBankRec:
         ledger_path: str,
         bank_path: str,
         date_format: str = "%d-%m-%Y"
-    ) -> dict:
+    ) -> Dict[str, Any]:
         """
         Full pipeline: load files → reconcile → persist → generate report.
         
@@ -351,4 +357,158 @@ class RunBill:
         return RunBill._normalize_bill_dict(bill_dict, blocks=blocks, source_file=image_path)
     
     
+    def process_bill(self, bill_id: str) -> Dict[str, Any]:
+
+        def _op(session: Session) -> Dict[str, Any]:
+            bill = session.query(BillModel).filter(
+                BillModel.id == bill_id
+            ).first()
+            if bill is None:
+                return {
+                    "status": "error",
+                    "message": f"Bill {bill_id} not found"
+                }
+
+            try:
+                bill_dict = bill.raw_extracted_data
+                if not bill_dict:
+                    if not bill.source_file:
+                        raise ValueError("Bill has neither raw_extracted_data nor source_file")
+
+                    bill_dict = self._run_ocr_and_extract(bill.source_file)
+                    bill.raw_extracted_data = bill_dict
+                    session.commit()
+                
+                else:
+                    bill_dict = self._normalize_bill_dict(
+                        bill_dict=bill_dict,
+                        source_file=bill.source_file,
+                        fallback_direction=bill.direction
+                    )
+                    bill.raw_extracted_data = bill_dict
+
+                bill.invoice_number = bill.invoice_number or bill_dict.get("invoice_number")
+                bill.vendor_name = bill.vendor_name or bill_dict.get("vendor_name")
+                bill.direction = bill_dict.get("_direction", bill.direction or "input")
+
+                journal_entry = JournalBuilder(bill=bill_dict).to_journal_entry()
+                if journal_entry is None:
+                    bill.status = "failed"
+                    bill.error_message = "Could not build a journal entry from this bill (bad/incomplete extraction)."
+                    session.commit()
+                    return {
+                        "status": "failed",
+                        "bill_id": bill_id,
+                        "reason": bill.error_message
+                    }
+
+                tds_engine = TDSEngine(financial_year=fy_label_for_date(journal_entry.date))
+
+                self.ledger_service.prime_tds_engine_aggregates(
+                    session=session,
+                    user_id=bill.user_id,
+                    deductee_name=bill_dict.get("vendor_name") or bill_dict.get("buyer_name") or "Unknown Vendor",
+                    financial_year=tds_engine.financial_year,
+                    tds_engine=tds_engine
+                )
+
+                tds_result = tds_engine.process_bill(
+                    bill=bill_dict,
+                    journal_entry=journal_entry
+                )
+                
+                self.ledger_service.persist_tds_engine_aggregates(
+                    session=session,
+                    user_id=bill.user_id,
+                    financial_year=tds_engine.financial_year,
+                    tds_engine=tds_engine,
+                )
+
+                journal_model = self.ledger_service.push_journal_entry(
+                    session=session,
+                    user_id=bill.user_id,
+                    journal_entry=tds_result.journal_entry,
+                    bill=bill
+                )
+                if journal_model is None:
+                    raise RuntimeError("Failed to persist journal entry")
+
+                tds_model = None
+                if tds_result.tds_applied and tds_result.tds_entry is not None:
+                    tds_model = self.ledger_service.push_tds_entry(
+                        session=session,
+                        user_id=bill.user_id,
+                        tds_entry=tds_result.tds_entry,
+                        journal_entry_model=journal_model,
+                    )
+
+                bill.status = "processed"
+                bill.error_message = None
+                session.commit()
+
+                return {
+                    "status": "success",
+                    "bill_id": bill_id,
+                    "journal_entry_id": journal_model.entry_id,
+                    "tds_applied": bool(tds_model),
+                    "tds_entry_id": tds_model.entry_id if tds_model else None,
+                    "warnings": tds_result.warnings,
+                }
+
+            except Exception as e:
+                bill.status = "failed"
+                bill.error_message = str(e)
+                session.commit()
+                raise
+            
+        return self.db_manager.run(_op)
+
+        
+        
+    def generate_gstr1(
+        self,
+        user_id: str,
+        period_label: str,
+        period_start: str,   # ISO "YYYY-MM-DD"
+        period_end: str,     # ISO "YYYY-MM-DD"
+    ) -> Dict[str, Any]:
+
+        def _op(session: Session) -> Dict[str, Any]:
+            start = date_.fromisoformat(period_start)
+            end = date_.fromisoformat(period_end)
+
+            bills = session.query(BillModel).filter(
+                BillModel.user_id == user_id,
+                BillModel.direction == "output",
+                BillModel.status == "processed",
+                BillModel.bill_date >= start,
+                BillModel.bill_date <= end
+            ).all()
+
+            bill_dicts = [
+                self._normalize_bill_dict(
+                    bill_dict=dict(b.raw_extracted_data),
+                    source_file=b.source_file,
+                    fallback_direction=b.direction
+                ) for b in bills if b.raw_extracted_data
+            ]
+
+            gstr1 = GSTR1Builder(bill_dicts).build(period_label=period_label)
+
+            ok = self.ledger_service.replace_gstr1_period(
+                session=session,
+                user_id=user_id,
+                period_label=period_label,
+                gstr1=gstr1
+            )
+
+            return {
+                "status": "success" if ok else "failed",
+                "period_label": period_label,
+                "bills_considered": len(bill_dicts),
+                "totals": gstr1.get("totals", {}),
+                "warnings": gstr1.get("warnings", []),
+            }
+
+        return self.db_manager.run(_op)
         

@@ -319,4 +319,29 @@ class RebuildServiceLedger:
                 "closing_warnings": closing_result.warnings if closing_result else [],
                 "trial_balance": tb.to_dict(),
             }
+            
+    def get_trial_balance(
+        self,
+        user_id: str,
+        as_on: date_
+    ) -> Dict[str, Any]:
+        
+        def _op(session: Session) -> Dict[str, Any]:
+            models = session.query(JournalEntryModel).filter(
+                JournalEntryModel.user_id == user_id,
+                JournalEntryModel.date <= as_on,
+            ).order_by(JournalEntryModel.date.asc()).all()
+            
+            entries = RebuildServiceLedger(
+                db_manager=self.db_manager
+            ).rebuild_journal_entries(models)
+            
+            builder, _, _ = LedgerBuilder.build(
+                [],
+                _prebuilt_entries=entries,
+                close_books_on=None,
+            )
+            return builder.trial_balance().to_dict()
+
+        return self.db_manager.run(_op)
 

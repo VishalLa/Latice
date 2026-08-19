@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import os
 from typing import Optional, Dict, List, Any
 
 from app.celery import celery_app
-from core.config import Config 
 from service import RunBankRec
 
 _run_bank_rec: Optional[RunBankRec] = None
@@ -26,10 +24,8 @@ def process_pre_data(
     statements_data: List[Dict[str, Any]],
     ledgers_data: List[Dict[str, Any]],
 ) -> Dict[str, str]:
-    run_bank_rec = get_run_bank_rec()
-    
     try:
-        return run_bank_rec.process_pre_data(
+        return get_run_bank_rec().process_pre_data(
             statements_data=statements_data,
             ledgers_data=ledgers_data
         )
@@ -48,10 +44,8 @@ def process_post_data(
     ignored_data: List[Dict[str, Any]], 
     audit_data: List[Dict[str, Any]]
 ) -> Dict[str, str]:
-    run_bank_rec = get_run_bank_rec()
-    
     try:
-        return run_bank_rec.process_post_data(
+        return get_run_bank_rec().process_post_data(
             matches_data=matches_data,
             ignored_data=ignored_data,
             audit_data=audit_data

@@ -329,6 +329,28 @@ class RunBill:
         blocks = ocr.ocr_image(image_path)
         bill_dict = parse_invoice(blocks)
         return RunBill._normalize_bill_dict(bill_dict, blocks=blocks, source_file=image_path)
+
+
+    def create_bill(
+        self,
+        user_id: str,
+        direction: str,
+        source_file: Optional[str] = None,
+        raw_extracted_data: Optional[dict] = None,
+    ) -> str:
+        def _op(session: Session) -> str:
+            bill = BillModel(
+                user_id=user_id,
+                direction=direction,
+                source_file=source_file,
+                raw_extracted_data=raw_extracted_data,
+                status="pending",
+            )
+            session.add(bill)
+            session.flush()
+            return bill.id
+
+        return self.db_manager.run(_op)
     
     
     def process_bill(self, bill_id: str) -> Dict[str, Any]:

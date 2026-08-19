@@ -414,13 +414,7 @@ class ResultBankRec:
         run_id: str, 
         user_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        GET /run_result/{run_id} — Shapes returned:
-            {"run_id": ..., "state": "PENDING",    "message": ...}
-            {"run_id": ..., "state": "STARTED",    "message": ...}
-            {"run_id": ..., "state": "FAILURE",    "error": ...}
-            {"run_id": ..., "state": "SUCCESS",    "summary": ..., "reconciliation_data": ..., "download_url": ...}
-        """
+        
         def _op(session: Session) -> Dict[str, Any]:
             run = self._find_run_internal(
                 session=session, 
@@ -465,7 +459,7 @@ class ResultBankRec:
                     "message": "Unknown run_id or not started yet.",
                 }
 
-            recon_result, _gl_objs, _bank_objs = bundle
+            recon_result, _, _ = bundle
             
             return {
                 "run_id": public_run_id,

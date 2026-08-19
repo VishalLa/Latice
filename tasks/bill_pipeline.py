@@ -22,10 +22,8 @@ def get_shared_run_bill() -> RunBill:
     name="tasks.process_bills"
 )
 def process_bill(self, bill_id: str) -> Dict[str, Any]:
-    run_bill = get_shared_run_bill()
-
     try:
-        return run_bill.process_bill(bill_id=bill_id)
+        return get_shared_run_bill().process_bill(bill_id=bill_id)
     except Exception as exc:
         raise self.retry(exc=exc, countdown=10)
 
@@ -42,10 +40,8 @@ def generate_gstr1(
     period_start: str,   # ISO "YYYY-MM-DD"
     period_end: str,     # ISO "YYYY-MM-DD"
 ) -> Dict[str, Any]:
-    run_bill = get_shared_run_bill()
-
     try:
-        return run_bill.generate_gstr1(
+        return get_shared_run_bill().generate_gstr1(
             user_id=user_id,
             period_label=period_label,
             period_start=period_start,
@@ -53,3 +49,4 @@ def generate_gstr1(
         )
     except Exception as exc:
         raise self.retry(exc=exc, countdown=10)
+    

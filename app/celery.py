@@ -11,7 +11,9 @@ def create_celery(config: Config) -> Celery:
         broker=config.REDIS_URL,
         backend=config.REDIS_URL,
         include=[
-            
+            "tasks.bank_rec",
+            "tasks.bill_pipeline",
+            "tasks.generate_report_tasks",
         ]
     )
     

@@ -5,6 +5,7 @@ from .run_result_service_bank_rec import ResultBankRec
 from .rec_journal_posting import RecJournalPosting
 from .rebuild_service_ledger import RebuildServiceLedger, PeriodAlreadyClosedError
 from .generate_reports import GenerateReports
+from .user_service import UserService
 from .helper import _log_db_errors, _safe_float, _coerce_date, _coerce_row_dates, fy_label_for_date
 
 __all__ = [
@@ -26,5 +27,7 @@ __all__ = [
     "_coerce_row_dates",
     "fy_label_for_date",
     
-    "GenerateReports"
+    "GenerateReports",
+    
+    "UserService"
 ]

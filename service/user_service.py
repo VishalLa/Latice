@@ -17,7 +17,7 @@ from ._base import Base
 class UserService:
     def __init__(self, db_manager: Optional[DatabaseManager] = None) -> None:
         base = Base(db_manager)
-        self.db_manager = base.db_manager
+        self.db_manager = base.get_manager
 
 
     @staticmethod

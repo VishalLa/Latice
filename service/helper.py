@@ -1,20 +1,80 @@
 from __future__ import annotations
 
 from functools import wraps
+import logging
+import time
 from typing import List, Dict, Any, Optional
 from datetime import date, datetime
 
 from sqlalchemy.exc import SQLAlchemyError
 
 
+logger = logging.getLogger(__name__)
+
+
+def _safe_log_value(value: Any) -> str:
+    if isinstance(value, dict):
+        redacted = {
+            key: "[REDACTED]"
+            if key.lower() in {"password", "token", "access_token", "authorization"}
+            else value
+            for key, value in value.items()
+        }
+        return repr(redacted)
+    
+    if isinstance(value, (list, tuple, set)):
+        return f"<{type(value).__name__} len={len(value)}>"
+    
+    if isinstance(value, (str, int, float, bool, type(None))):
+        return repr(value)
+    
+    return f"<{type(value).__name__}>"
+
+
+def _log_call(fn):
+    """Log function entry, completion time, and failures without secrets."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        started = time.perf_counter()
+        logger.info(
+            "Calling %s.%s args=%s kwargs=%s",
+            fn.__module__,
+            fn.__qualname__,
+            _safe_log_value(args[1:] if args and hasattr(args[0], fn.__name__) else args),
+            _safe_log_value(kwargs),
+        )
+        
+        try:
+            result = fn(*args, **kwargs)
+        except Exception:
+            logger.exception(
+                "%s.%s failed after %.3fs",
+                fn.__module__,
+                fn.__qualname__,
+                time.perf_counter() - started,
+            )
+            raise
+        
+        logger.info(
+            "%s.%s completed in %.3fs",
+            fn.__module__,
+            fn.__qualname__,
+            time.perf_counter() - started,
+        )
+        return result
+
+    return wrapper
+
+
 def _log_db_errors(action: str):
     def decorator(fn):
-        @wraps
+        @_log_call
+        @wraps(fn)
         def wrapper(*args, **kwargs):
             try:
                 return fn(*args, **kwargs)
             except SQLAlchemyError as e:
-                print(f"Database error while {action}: {e}")
+                logger.exception("Database error while %s", action)
                 raise
 
         return wrapper

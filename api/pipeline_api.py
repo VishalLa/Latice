@@ -11,7 +11,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from werkzeug.utils import secure_filename
 
 from app.celery import celery_app
-from service import RunBill
+from service import RunBill, _log_call
 from tasks.bill_pipeline import generate_gstr1, process_bill
 
 
@@ -46,6 +46,7 @@ def _task_status(task_id: str):
 
 @app.route("/bills", methods=["POST"])
 @jwt_required()
+@_log_call
 def upload_bill():
     direction = request.form.get("direction", "input").lower()
     if direction not in {"input", "output"}:
@@ -106,12 +107,14 @@ def upload_bill():
 
 @app.route("/bills/<bill_id>/status", methods=["GET"])
 @jwt_required()
+@_log_call
 def bill_status(bill_id: str):
     return _task_status(bill_id)
 
 
 @app.route("/gstr1", methods=["POST"])
 @jwt_required()
+@_log_call
 def generate_gstr1_report():
     data = request.get_json(silent=True) or {}
     required = ("period_label", "period_start", "period_end")
@@ -142,6 +145,7 @@ def generate_gstr1_report():
 
 @app.route("/tasks/<task_id>", methods=["GET"])
 @jwt_required()
+@_log_call
 def task_status(task_id: str):
     return _task_status(task_id)
 

@@ -17,7 +17,7 @@ from database import (
     JournalLineModel
 )
 
-from .helper import _log_db_errors, _safe_float
+from .helper import _log_call, _log_db_errors, _safe_float
 
 
 class RecJournalPosting:
@@ -47,6 +47,7 @@ class RecJournalPosting:
         return AccountGroup.SUNDRY_CREDITORS if dr_cr == "Cr" else AccountGroup.SUNDRY_DEBTORS
     
     
+    @_log_call
     @_log_db_errors("approving and posting journal entries")
     def approve_journal_entries(
         self,

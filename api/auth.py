@@ -11,7 +11,7 @@ from flask_jwt_extended import (
     get_jwt
 )
 
-from service import UserService
+from service import UserService, _log_call
 
 app = Blueprint("auth", __name__)
 
@@ -41,11 +41,14 @@ def role_required(role: str):
                 }), 403
 
             return fn(*args, **kwargs)
+        wrapper.__name__ = fn.__name__
+        wrapper.__doc__ = fn.__doc__
         return wrapper
     return decorator
 
 
 @app.route('/register', methods=['POST'])
+@_log_call
 def register_user():
     data = request.json or {}
 
@@ -84,6 +87,7 @@ def register_user():
 
 
 @app.route("/login", methods=["POST"])
+@_log_call
 def login_user():
     data = request.get_json(silent=True) or {}
     email = data.get("email")
@@ -104,6 +108,7 @@ def login_user():
 
 @app.route("/logout", methods=["POST"])
 @jwt_required()
+@_log_call
 def logout_user():
     claims = get_jwt()
     expires_at = datetime.fromtimestamp(claims["exp"], tz=timezone.utc)
@@ -119,6 +124,7 @@ def logout_user():
 
 @app.route("/me", methods=["GET"])
 @jwt_required()
+@_log_call
 def current_user():
     user = get_user_service().get_user(get_jwt_identity())
     if user is None:
@@ -135,6 +141,7 @@ def current_user():
 
 @app.route("/delete", methods=["DELETE"])
 @jwt_required()
+@_log_call
 def delete_user():
     data = request.get_json(silent=True) or {}
     result = get_user_service().delete_account(

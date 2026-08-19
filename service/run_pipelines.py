@@ -20,6 +20,7 @@ from .store_ledger_data import PushLedgerData
 from .reports.bank_recon_xlsx import write_bank_recon_xlsx
 from .helper import _safe_float, fy_label_for_date
 from ._base import Base
+from .helper import _log_call
 
 class RunBankRec:
     
@@ -111,6 +112,7 @@ class RunBankRec:
             os.remove(bank_path)
     
     
+    @_log_call
     def process_pre_data(
         self,
         statements_data: List[Dict[str, Any]],
@@ -123,6 +125,7 @@ class RunBankRec:
         return {"status": "success" if success else "failed"}
     
     
+    @_log_call
     def process_post_data(
         self, 
         matches_data: List[Dict[str, Any]], 
@@ -137,6 +140,7 @@ class RunBankRec:
         return {"status": "success" if success else "failed"}
         
         
+    @_log_call
     def run_reconciliation_pipeline(
         self,
         run_id: str,
@@ -331,6 +335,7 @@ class RunBill:
         return RunBill._normalize_bill_dict(bill_dict, blocks=blocks, source_file=image_path)
 
 
+    @_log_call
     def create_bill(
         self,
         user_id: str,
@@ -353,6 +358,7 @@ class RunBill:
         return self.db_manager.run(_op)
     
     
+    @_log_call
     def process_bill(self, bill_id: str) -> Dict[str, Any]:
 
         def _op(session: Session) -> Dict[str, Any]:
@@ -461,6 +467,7 @@ class RunBill:
 
         
         
+    @_log_call
     def generate_gstr1(
         self,
         user_id: str,

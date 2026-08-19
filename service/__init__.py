@@ -6,7 +6,7 @@ from .rec_journal_posting import RecJournalPosting
 from .rebuild_service_ledger import RebuildServiceLedger, PeriodAlreadyClosedError
 from .generate_reports import GenerateReports
 from .user_service import UserService
-from .helper import _log_db_errors, _safe_float, _coerce_date, _coerce_row_dates, fy_label_for_date
+from .helper import _log_db_errors, _safe_float, _coerce_date, _coerce_row_dates, fy_label_for_date, _log_call, _safe_log_value
 
 __all__ = [
     "Base",
@@ -25,6 +25,8 @@ __all__ = [
     "_safe_float",
     "_coerce_date",
     "_coerce_row_dates",
+    "_log_call",
+    "_safe_log_value",
     "fy_label_for_date",
     
     "GenerateReports",

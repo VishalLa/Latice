@@ -32,6 +32,7 @@ from .reports.gstr1_xlsx import write_gstr1_xlsx
 from .reports.journal_xlsx import write_journal_xlsx
 from .reports.ledger_xlsx import write_ledger_xlsx
 from .reports.tds_xlsx import write_tds_xlsx
+from .helper import _log_call
 
 
 class GenerateReports:
@@ -106,6 +107,7 @@ class GenerateReports:
         }
         
     
+    @_log_call
     def export_gstr1_report(
         self,
         period_label: str,
@@ -129,6 +131,7 @@ class GenerateReports:
         return path, True
     
     
+    @_log_call
     def _query_journal_entries(
         self,
         session: Session,
@@ -146,6 +149,7 @@ class GenerateReports:
         return query.order_by(JournalEntryModel.date.asc()).all()
     
     
+    @_log_call
     def export_journal_report(
         self,
         date_from: date_,
@@ -173,6 +177,7 @@ class GenerateReports:
         return path, True
     
     
+    @_log_call
     def _load_general_ledger(
         self,
         session: Session,
@@ -192,6 +197,7 @@ class GenerateReports:
         return gl, entries
     
     
+    @_log_call
     def export_ledger_report(
         self,
         as_on: date_,
@@ -215,6 +221,7 @@ class GenerateReports:
         return path, True
     
     
+    @_log_call
     def _load_tds_register(
         self,
         session: Session,
@@ -238,6 +245,7 @@ class GenerateReports:
         )
         
     
+    @_log_call
     def export_tds_report(
         self,
         period_start: date_, 
@@ -263,6 +271,7 @@ class GenerateReports:
         return path, True
     
     
+    @_log_call
     def export_bank_rec_report(
         self,
         run_id: str,

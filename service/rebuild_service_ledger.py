@@ -27,6 +27,7 @@ from database import (
 )
 
 from ledger import LedgerBuilder
+from .helper import _log_call
 
 
 class PeriodAlreadyClosedError(Exception):
@@ -320,6 +321,7 @@ class RebuildServiceLedger:
                 "trial_balance": tb.to_dict(),
             }
             
+    @_log_call
     def get_trial_balance(
         self,
         user_id: str,

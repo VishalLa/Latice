@@ -15,6 +15,7 @@ from tasks.generate_report_tasks import (
     generate_tds_reprot as generate_tds_task,
 )
 from app.celery import celery_app
+from service import _log_call
 
 
 app = Blueprint("reports", __name__)
@@ -32,6 +33,7 @@ def _enqueue(task, **kwargs):
 
 @app.route("/reports/tasks/<task_id>", methods=["GET"])
 @jwt_required()
+@_log_call
 def report_task_status(task_id: str):
     task = AsyncResult(task_id, app=celery_app)
     payload = {
@@ -51,6 +53,7 @@ def report_task_status(task_id: str):
 
 @app.route("/reports/tasks/<task_id>/download", methods=["GET"])
 @jwt_required()
+@_log_call
 def download_report_task(task_id: str):
     task = AsyncResult(task_id, app=celery_app)
     if task.state in {"PENDING", "STARTED", "RETRY"}:
@@ -91,6 +94,7 @@ def download_report_task(task_id: str):
 
 @app.route("/reports/bank-reconciliation", methods=["POST"])
 @jwt_required()
+@_log_call
 def generate_bank_reconciliation_report():
     data = request.get_json(silent=True) or {}
     run_id = data.get("run_id")
@@ -109,6 +113,7 @@ def generate_bank_reconciliation_report():
 
 @app.route("/reports/gstr1", methods=["POST"])
 @jwt_required()
+@_log_call
 def generate_gstr1_report():
     data = request.get_json(silent=True) or {}
     period_label = data.get("period_label")
@@ -127,6 +132,7 @@ def generate_gstr1_report():
 
 @app.route("/reports/journal", methods=["POST"])
 @jwt_required()
+@_log_call
 def generate_journal_report():
     data = request.get_json(silent=True) or {}
     try:
@@ -154,6 +160,7 @@ def generate_journal_report():
 
 @app.route("/reports/ledger", methods=["POST"])
 @jwt_required()
+@_log_call
 def generate_ledger_report():
     data = request.get_json(silent=True) or {}
     try:
@@ -173,6 +180,7 @@ def generate_ledger_report():
 
 @app.route("/reports/tds", methods=["POST"])
 @jwt_required()
+@_log_call
 def generate_tds_report():
     data = request.get_json(silent=True) or {}
     try:

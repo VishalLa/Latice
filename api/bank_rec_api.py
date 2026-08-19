@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 
 from app.celery import celery_app
 from core.config import Config
-from service import ResultBankRec, RunBankRec, RecJournalPosting
+from service import ResultBankRec, RunBankRec, RecJournalPosting, _log_call
 from tasks.bank_rec import run_reconciliation_pipeline
 from tasks.generate_report_tasks import generate_report_bank_rec
 
@@ -43,6 +43,7 @@ def _allowed(filename: str) -> bool:
 
 @app.route("/reconciliation", methods=["POST"])
 @jwt_required()
+@_log_call
 def start_reconciliation():
     ledger_file = request.files.get("ledger_file")
     bank_file = request.files.get("bank_file")
@@ -85,6 +86,7 @@ def start_reconciliation():
 
 @app.route("/reconciliation/<run_id>/status", methods=["GET"])
 @jwt_required()
+@_log_call
 def run_status(run_id: str):
     task = AsyncResult(run_id, app=celery_app)
     payload = {"run_id": run_id, "state": task.state}
@@ -99,6 +101,7 @@ def run_status(run_id: str):
 
 @app.route("/reconciliation/<run_id>", methods=["GET"])
 @jwt_required()
+@_log_call
 def run_result(run_id: str):
     _, result_service, _ = _services()
     result = result_service.get_run_result(
@@ -111,6 +114,7 @@ def run_result(run_id: str):
 
 @app.route("/reconciliation/<run_id>/report", methods=["POST"])
 @jwt_required()
+@_log_call
 def generate_report(run_id: str):
     task = generate_report_bank_rec.delay(
         run_id=run_id, 
@@ -126,6 +130,7 @@ def generate_report(run_id: str):
 
 @app.route("/reconciliation/<run_id>/journal-entries/approve", methods=["POST"])
 @jwt_required()
+@_log_call
 def approve_journal_entries(run_id: str):
     entries = (request.get_json(silent=True) or {}).get("entries")
     if not isinstance(entries, list) or not entries:

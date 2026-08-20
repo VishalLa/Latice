@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Sequence
+from typing import List, Sequence, Tuple
 from schema import BankStatement, LedgerFormat, SameSideDetection, MatchedPair
 
 

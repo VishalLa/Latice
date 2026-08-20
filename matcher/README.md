@@ -68,7 +68,7 @@ GL Records + Bank Records
 | `same_side_detect.py`    | Infers whether GL debit/credit maps to the same or opposite bank column     |
 | `exact_match.py`         | Phase 1 — strict date/amount/reference matching                             |
 | `fuzzy_match.py`         | Phase 2 — 17 deterministic heuristic-matching strategies                    |
-| `memory.py`              | Phase 3 — cross-run pattern memory (recurring counterparties)               |
+| `memory_match.py`        | Phase 3 — cross-run pattern memory and persistence backends                |
 | `ai_matcher.py`          | Phase 4 — LLM-backed semantic matcher (1-to-1 and many-to-1)                |
 | `residual_reconciler.py` | Phase 5 — classification, wide-window resolution, journal drafting          |
 | `confidence.py`          | Normalizes confidence values and computes match-quality statistics          |
@@ -86,7 +86,7 @@ record matched at any phase is removed from every pool downstream.
 
 `same_side_detect.detect_same_side()`
 
-Before any matching happens, the pipeline samples up to 40 GL and 40 bank
+Before any matching happens, the pipeline examines the supplied GL and bank
 records and cross-checks whether GL debits line up with bank debits
 (`same_side=True`) or with bank credits (`same_side=False`). This handles
 statement formats where the bank's "debit"/"credit" columns are mirrored
@@ -166,7 +166,7 @@ Key mechanics:
 
 ### Phase 3 — Memory Match
 
-`__init__._apply_memory_matches()` using `memory.MatchMemory`
+`memory_match.memory_matcher()` using `memory_match.MatchMemory`
 
 If a `MatchMemory` instance is supplied, the pipeline checks whether any
 remaining GL/bank pair's **normalized counterparty signature**
@@ -330,7 +330,7 @@ operates on a wider, less-certain search space by design.
 
 ```python
 from matcher import reconcile, MatchMemory
-from memory import JSONFileBackend  # or your own backend
+from matcher.memory_match import JSONFileBackend  # or your own backend
 
 warnings = []
 memory = MatchMemory(backend=JSONFileBackend("memory/patterns.json"))
@@ -352,10 +352,11 @@ print(result["summary"])
 ```
 
 `ledger_result["records"]` and `bank_result["records"]` must be sequences of
-`LedgerFormat` / `BankStatement` objects (see the `schema` package) exposing
-at minimum: `ledger_id`, `transaction_date`, `debit_amount`, `credit_amount`,
-`account_name`, `reference_id` (ledger side) and `row_index`, `date`,
-`debit`, `credit`, `narration`, `txn_id` (bank side).
+`LedgerFormat` / `BankStatement` objects (see the `schema` package). Ledger
+records should expose `ledger_id`, `transaction_date`, `debit_amount`,
+`credit_amount`, `account_name`, and `reference_id`. Bank records should expose
+`row_index`, `date`, `debit_amount`, `credit_amount`, `narration`, and `txn_id`.
+The matcher reads typed fields, not arbitrary dictionaries.
 
 ---
 
@@ -383,7 +384,6 @@ at minimum: `ledger_id`, `transaction_date`, `debit_amount`, `credit_amount`,
   "AI_MATCHES": [...],                  # 1-to-1 + many-to-1, annotated
   "AI_AGENT": [...],                    # alias of AI_MATCHES
   "AI_AUDIT_QUEUE": [...],              # low-confidence AI proposals
-  "RESIDUAL_TIMING_MATCHES": [...],
   "RESIDUAL_SPLIT_MATCHES": [...],
   "SUGGESTED_JOURNAL_ENTRIES": [...],
   "HUMAN_REVIEW_QUEUE": [...],
@@ -408,13 +408,12 @@ all matches uniformly.
 | `LOW_QUALITY_CONFIDENCE_BAR`           | `__init__.py`            | `0.5`   | Threshold for "low confidence" in the quality summary |
 | `_CONFIDENCE_RATIO`                    | `same_side_detect.py`    | `0.65`  | Vote share needed to be "confident" on orientation   |
 | `_MIN_MATCHED_PAIRS`                   | `same_side_detect.py`    | `3`     | Minimum sample votes before rendering an opinion     |
-| `_SAMPLE_SIZE`                         | `same_side_detect.py`    | `40`    | Records sampled from each side for orientation check |
 | `MAX_COMBINATION_SIZE`                 | `fuzzy_match.py`         | `6`     | Max items considered in a many-to-one combination    |
 | `MAX_COMBINATION_POOL_SIZE`            | `fuzzy_match.py`         | `15`    | Candidate pool size before combination search         |
 | `_CROSS_MONTH_BUFFER`                  | `fuzzy_match.py`         | `15`    | Extra days allowed when a match spans month-end       |
 | `CONFIDENCE_THRESHOLD`                 | `ai_matcher.py`          | `0.75`  | Minimum LLM confidence to accept (else → audit queue) |
 | `CANDIDATE_DATE_WINDOW_DAYS`           | `ai_matcher.py`          | `10`    | Many-to-1 candidate pre-filter window                 |
-| `MAX_CANDIDATES`                       | `ai_matcher.py`          | `12`    | Max candidates sent to LLM per many-to-1 bank row     |
+| `MAX_RECORDS_PER_WINDOW`               | `ai_matcher.py`          | `20`    | Max ledger/bank records sent per AI batch window       |
 | `WINDOW_OVERLAP_DAYS`                  | `ai_matcher.py`          | `7`     | Overlap between successive 30-day batch windows       |
 | `TIMING_WINDOW_DAYS`                   | `residual_reconciler.py` | `45`    | Wide-window timing resolution horizon                 |
 | `SPLIT_MAX_COMBINATION_SIZE`           | `residual_reconciler.py` | `8`     | Max items in Phase-5 split-sum search                 |

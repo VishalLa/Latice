@@ -33,7 +33,10 @@ bills (list[dict])                opening_balances.json
   tds_modified JournalEntry[]  ◄───────────┘
         │
         ▼
-    ledger.py / general_ledger_class.py
+        `ledger.py` also exposes a slimmer `build_ledger()` for cases where you
+        just want a posted `GeneralLedger` without the TDS/GST/GSTR-1 reporting
+        layer. It returns the ledger, the sorted audit trail, and an optional closing
+        result.
     build_ledger()  →  GeneralLedger (posts every entry)
         │
         ├──► close_books()  (journal.py)   — optional year-end close
@@ -55,9 +58,10 @@ bills (list[dict])                opening_balances.json
    and returns one result dict)
 ```
 
-`run_pipeline.py` exposes a slimmer `build_ledger()` for cases where you
+`ledger.py` also exposes a slimmer `build_ledger()` for cases where you
 just want a posted `GeneralLedger` without the TDS/GST/GSTR-1 reporting
-layer.
+layer. It returns the ledger, the sorted audit trail, and an optional closing
+result.
 
 ---
 
@@ -153,12 +157,6 @@ Builds **GSTR-1** (outward-supply GST return) data directly from bills
   - `totals` — grand totals for reconciliation
   - `warnings` — e.g. missing invoice numbers, missing HSN codes
 
-### `run_pipeline.py`
-Lightweight orchestrator: `build_ledger(bills, opening_balances, _prebuilt_entries)`
-posts opening balances then transaction entries to a fresh
-`GeneralLedger` and returns `(gl, all_entries)`, sorted by date. Use this
-when you don't need TDS/GST/GSTR-1 reporting.
-
 ### `__init__.py`
 The **package entry point**. `build_complete_ledger(...)` runs the full
 pipeline end-to-end:
@@ -203,7 +201,6 @@ bills = [
     },
     # ...more bills
 ]
-
 result = build_complete_ledger(
     bills                 = bills,
     opening_balances_json = "opening_balances.json",
@@ -214,7 +211,6 @@ result = build_complete_ledger(
     deductor_name         = "Your Firm Pvt Ltd",
     close_books_on        = date(2026, 3, 31),   # omit to skip year-end close
 )
-
 tb  = result["trial_balance"]
 gst = result["gst_summary"]
 tds_register = result["tds_register"]
@@ -224,10 +220,15 @@ form_26q     = result["form_26q"]          # {"Q1": Form26Q, "Q2": ..., ...}
 ### Minimal path (no TDS/GST reporting, just a ledger)
 
 ```python
-from ledger.run_pipeline import build_ledger
+from ledger import build_ledger
 
-gl, entries = build_ledger(bills=bills)
+gl, entries, closing_result = build_ledger(bills=bills)
 ```
+
+`build_ledger()` accepts optional `opening_balances` as already-built
+`JournalEntry` objects. The internal `_prebuilt_entries` argument is intended
+for the full orchestrator after TDS processing; callers should normally pass
+raw bills instead.
 
 ---
 

@@ -79,8 +79,10 @@ Everything is scoped per logged-in user, with an admin role that can see across 
                     │  PostgreSQL    │  │   Celery workers      │
                     │  (SQLAlchemy)  │  │   (broker: Redis)     │
                     └────────────────┘  │                       │
-                                        │  • bank_rec_task      │
-                                        │  • bill_pipeline_task │
+                                        │  • tasks.bank_rec     │
+                                        │  • tasks.bill_pipeline│
+                                        │  • tasks.generate_    │
+                                        │    report_tasks       │
                                         └─────────┬─────────────┘
                                                   │
                      ┌────────────────────────────┼───────────────────────┐
@@ -94,7 +96,7 @@ Everything is scoped per logged-in user, with an admin role that can see across 
                     │                              │                         │
                     ▼                              ▼                         ▼
            ┌──────────────────────────────────────────────────────────────────────┐
-           │        Ollama (local LLM server, model: phi3) — used only as a       │
+           │        Ollama (local LLM server, model: phi3:latest) — used only as  │
            │        fallback matcher for ambiguous bank-vs-ledger pairs           │
            └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -112,7 +114,7 @@ Long-running work (reconciliation runs, OCR + bill posting) is **never done in t
 - **Validation/config:** Pydantic v2 + `pydantic-settings`
 - **Auth:** `passlib` (bcrypt_sha256) for password hashing, `itsdangerous` for signed tokens, JWT for session auth
 - **OCR:** PaddleOCR (CPU mode) + OpenCV headless
-- **Local LLM inference:** `langchain-ollama` + `ollama` Python client, talking to a local Ollama server running **Phi-3.5-mini-instruct**
+- **Local LLM inference:** `langchain-ollama` + `ollama` Python client, talking to the configured local Ollama model (`OLLAMA_NAME`, default `phi3:latest`)
 - **Fuzzy string matching:** `rapidfuzz`
 - **Excel I/O:** `openpyxl`, `pandas`
 
@@ -134,8 +136,7 @@ Reconcile/
 │   ├── main.py                     # dev entrypoint (Flask app.run)
 │   ├── app/
 │   │   ├── __init__.py             # create_app() factory, blueprint registration
-│   │   ├── celery.py               # Celery app instance
-│   │   └── cache.py                # Flask-Caching instance
+│   │   └── celery.py               # Celery app instance
 │   ├── core/
 │   │   └── config.py               # Pydantic Settings, DB URL assembly, DB bootstrap
 │   ├── database/
@@ -143,11 +144,11 @@ Reconcile/
 │   │   ├── session.py              # session factory / get_session() context manager
 │   │   ├── user.py                 # User model + password hashing
 │   │   ├── security.py             # bcrypt hashing, signed-token helpers
-│   │   ├── bank_renc_model.py      # reconciliation-related ORM models
+│   │   ├── bank_rec_model.py       # reconciliation-related ORM models
 │   │   ├── ledger_tax_models.py    # Bill / Journal / TDS / GSTR1 ORM models
 │   │   └── period_model.py         # Fiscal period + carried-forward balances
 │   ├── schema/                     # plain dataclasses (non-ORM) — the "domain" layer
-│   │   ├── bank_renc_schema.py
+│   │   ├── bank_rec_schema.py
 │   │   ├── journal_schema.py
 │   │   ├── ledger_schema.py
 │   │   ├── tds_schema.py
@@ -162,7 +163,7 @@ Reconcile/
 │   │   ├── exact_match.py
 │   │   ├── fuzzy_match.py
 │   │   ├── same_side_detect.py
-│   │   ├── memory.py                 # learns recurring counterparty patterns
+│   │   ├── memory_match.py           # learns recurring counterparty patterns
 │   │   ├── ai_matcher.py              # Ollama/phi3-backed fallback matcher
 │   │   ├── residual_reconciler.py     # many-to-one / split-transaction solver
 │   │   └── confidence.py
@@ -172,27 +173,28 @@ Reconcile/
 │   │   ├── opening_balances.py
 │   │   ├── tds.py                    # TDSEngine (see §5.4)
 │   │   ├── gstr1.py                  # GSTR-1 builder (see §5.5)
-│   │   └── run_pipeline.py           # build_ledger() orchestration helper
-│   ├── service/                    # cross-cutting application services
-│   │   ├── store_data.py / store_ledger_data.py   # persistence helpers
-│   │   ├── reconciliation_journal_posting.py       # approve & post matched entries
-│   │   ├── bank_rec_report.py                      # assembles reconciliation results
-│   │   └── period_close.py                         # fiscal period close-out
-│   ├── reports/                    # Excel report generators (openpyxl)
-│   │   ├── bank_recon_xlsx.py, journal_xlsx.py
-│   │   ├── ledger_xlsx.py, tds_xlsx.py, gstr1_xlsx.py
+│   │   └── helper.py                 # ledger helper functions
+│   ├── service/                    # application services and persistence
+│   │   ├── run_pipelines.py         # bill and reconciliation run services
+│   │   ├── store_bank_rec_data.py   # reconciliation persistence
+│   │   ├── store_ledger_data.py     # ledger persistence
+│   │   ├── rec_journal_posting.py   # approve & post matched entries
+│   │   ├── rebuild_service_ledger.py # period/ledger rebuilds
+│   │   ├── generate_reports.py      # Excel report service
+│   │   └── helper.py                # logging and value/date helpers
 │   ├── tasks/                      # Celery task definitions
-│   │   ├── bank_rec_task.py
-│   │   └── bill_pipeline_task.py
+│   │   ├── bank_rec.py
+│   │   ├── bill_pipeline.py
+│   │   └── generate_report_tasks.py
 │   ├── api/                        # Flask blueprints (HTTP layer only)
-│   │   ├── auth.py, bank_rec_api.py, bills_api.py
-│   │   ├── journal_api.py, ledger_api.py, tds_api.py, gstr1_api.py
-│   │   └── _scoping.py               # shared multi-tenant scoping helpers
-│   ├── scripts/
-│   │   └── promote_admin.py          # CLI: promote a user to ADMIN
+│   │   ├── auth.py                  # registration, login, logout, profile
+│   │   ├── bank_rec_api.py          # reconciliation workflow
+│   │   ├── pipeline_api.py          # bills and GSTR-1 pipeline
+│   │   ├── ledger_api.py            # trial balance
+│   │   └── report_api.py            # report tasks and downloads
 │   ├── storage/                      # generated report files land here
-│   ├── docker-compose.yml, Dockerfile, start.sh, start.bat
-│   └── req.txt / pyproject.toml
+│   ├── docker-compose.yml, Dockerfile, start.sh
+│   └── req.txt / pyproject.toml / uv.lock
 │
 └── Frontend/
     ├── src/
@@ -224,7 +226,7 @@ This is the flagship feature, implemented as a **five-stage cascading pipeline**
    | `TRANSPOSITION` | ₹0.00 (digit-swap detection) |
    | `AI_MATCHER` | ₹5.00 |
    | `DEFAULT` | ₹1.00 |
-3. **Memory-based match** (`memory.py`) — a per-tenant learned dictionary of "this ledger account name + this bank narration pattern have matched before," so recurring counterparties (rent, salary runs, recurring vendor payments) are auto-matched with high confidence on sight.
+3. **Memory-based match** (`memory_match.py`) — a per-tenant learned dictionary of "this ledger account name + this bank narration pattern have matched before," so recurring counterparties (rent, salary runs, recurring vendor payments) are auto-matched with high confidence on sight.
 4. **AI matcher** (`ai_matcher.py`) — for whatever remains, candidate ledger/bank rows within a configurable date window (`CANDIDATE_DATE_WINDOW_DAYS = 10`, sliding with `WINDOW_OVERLAP_DAYS = 7`, capped at `MAX_CANDIDATES = 12` per window) are sent to a **local** LLM (Ollama running Phi-3.5, `temperature=0.0` for determinism) with a structured-output prompt. The model returns strict Pydantic-validated JSON (`AI1to1Match` / `AIManyToOneMatch`), and anything below `CONFIDENCE_THRESHOLD = 0.75` is discarded rather than trusted. Running this locally (rather than calling a cloud LLM API) means bank statement and ledger data never leaves the deployment — an intentional privacy decision given the sensitivity of the data.
 5. **Residual reconciler** (`residual_reconciler.py`) — for transactions still unmatched after all of the above, attempts many-to-one / split-payment reconciliation (e.g. three ledger invoices summing to one bulk bank credit) and produces a final "audit investigation" list of genuinely unexplained items for human review.
 
@@ -248,7 +250,7 @@ The pipeline is deliberately conservative: rather than guessing, extractors retu
 
 ### 5.3 Journal & General Ledger
 
-`ledger/journal.py` converts a bill dict (or manual entry) into a proper double-entry `JournalEntry` (`schema/journal_schema.py`), against a chart of accounts (`COA`) with a defined `AccountGroup` taxonomy and `DrCr` enum. `ledger/ledger.py` / `general_ledger_class.py` implement `GeneralLedger`, which posts entries and can produce a `TrialBalance` as-of any date. `ledger/opening_balances.py` allows a general ledger to be seeded with carried-forward balances from a prior period (see Period Close, §5.4-adjacent, in `service/period_close.py`).
+`ledger/journal.py` converts a bill dict (or manual entry) into a proper double-entry `JournalEntry` (`schema/journal_schema.py`), against a chart of accounts (`COA`) with a defined `AccountGroup` taxonomy and `DrCr` enum. `ledger/ledger.py` / `general_ledger_class.py` implement `GeneralLedger`, which posts entries and can produce a `TrialBalance` as-of any date. `ledger/opening_balances.py` allows a general ledger to be seeded with carried-forward balances from a prior period; period rebuild and close operations are handled by `service/rebuild_service_ledger.py`.
 
 ### 5.4 TDS Engine
 
@@ -286,7 +288,7 @@ The pipeline is deliberately conservative: rather than guessing, extractors retu
 
 ### 5.6 Reporting (Excel exports)
 
-Every major module has a matching Excel report generator under `reports/`, built on `openpyxl`:
+Excel reports are generated by `service/generate_reports.py`, using the report modules under `service/reports/`:
 - `bank_recon_xlsx.py` — full reconciliation report (matched/unmatched, by adjustment type, confidence)
 - `journal_xlsx.py` — journal register export
 - `ledger_xlsx.py` — trial balance / ledger export
@@ -325,8 +327,8 @@ All domain-owning tables carry a `user_id` foreign key for tenant isolation (see
 
 - **Auth:** JWT bearer tokens (`Flask-JWT-Extended`), issued on `/auth/login`, required on virtually every API route via `@jwt_required()`.
 - **Passwords:** hashed with `bcrypt_sha256` via `passlib` — never stored or logged in plaintext.
-- **Roles:** two roles — `USER` (default) and `ADMIN`. Promotion is a deliberate out-of-band action: `python scripts/promote_admin.py <username>` — there is **no API endpoint** that can self-promote a user to admin.
-- **Scoping (`api/_scoping.py`):** every data-fetching route calls `scope_owner_id(user, requested_user_id)` — a non-admin is always hard-locked to `user.id` regardless of what they pass in query params; an admin may optionally pass `?user_id=...` to view a specific tenant's data, or omit it to see everything. This is the single choke point for tenant isolation — worth reviewing carefully if you extend the API.
+- **Roles:** two roles — `USER` (default) and `ADMIN`. Role checks are enforced by `role_required()` in `api/auth.py`; there is no public self-promotion endpoint.
+- **Scoping:** service methods receive the authenticated user ID and apply tenant filtering when reading or writing database records. Keep that owner ID propagation intact when extending an API or task.
 
 ---
 
@@ -337,55 +339,44 @@ Base URL prefix per blueprint (registered in `app/__init__.py`):
 ### `/auth`
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/auth/register` | — | Create a user (`username`, `password`, optional `email`) |
-| POST | `/auth/login` | — | Returns `{ access_token, user_id }` |
+| POST | `/auth/register` | — | Create a user (`password`, `first_name`, `phone_no`, `email`; optional `last_name`, `address`) |
+| POST | `/auth/login` | — | Authenticate with `email` and `password` |
 | GET | `/auth/me` | JWT | Current user profile |
+| POST | `/auth/logout` | JWT | Revoke the current token |
+| DELETE | `/auth/delete` | JWT | Delete the current account |
 
-### `/api` (bank reconciliation) — `bank_rec_api.py`
+### `/api/bank-rec` (bank reconciliation) — `bank_rec_api.py`
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/run_reconciliation` | Upload `ledger_file` + `bank_file` (csv/xlsx), enqueues a Celery run |
-| GET | `/api/run_status/<run_id>` | Poll Celery task state / run status |
-| GET | `/api/run_result/<run_id>` | Full match results once complete |
-| GET | `/api/download_report/run/<run_id>` | Download the generated `.xlsx` for a run |
-| GET | `/api/download_report/<filename>` | Download a report by filename |
-| POST | `/api/generate_report/run/<run_id>` | (Re)generate the Excel report for a completed run |
-| POST | `/api/run/<run_id>/approve_journal_entries` | Approve matched entries → post to the general ledger |
+| POST | `/api/bank-rec/reconciliation` | Upload `ledger_file` + `bank_file` (csv/xlsx), enqueues a Celery run |
+| GET | `/api/bank-rec/reconciliation/<run_id>/status` | Poll Celery task state / run status |
+| GET | `/api/bank-rec/reconciliation/<run_id>` | Full match results once complete |
+| POST | `/api/bank-rec/reconciliation/<run_id>/report` | Queue the Excel report for a run |
+| POST | `/api/bank-rec/reconciliation/<run_id>/journal-entries/approve` | Approve matched entries and post them to the ledger |
 
-### `/api/bills` — `bills_api.py`
+### `/api/pipeline` — `pipeline_api.py`
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/bills/upload` | Upload a bill image/PDF **or** raw JSON (`raw_data`), enqueues OCR + journal pipeline |
-| GET | `/api/bills/<bill_id>/status` | Poll OCR/posting status for a bill |
-| GET | `/api/bills` | List bills (filterable by `status`, `direction`; admin can pass `user_id`) |
-
-### `/api/journal` — `journal_api.py`
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/journal` | List journal entries (filter by date range) |
-| GET | `/api/journal/export` | Excel export of the journal register |
+| POST | `/api/pipeline/bills` | Upload a bill image/PDF or raw JSON (`raw_data`), enqueues OCR + journal processing |
+| GET | `/api/pipeline/bills/<bill_id>/status` | Poll bill processing status |
+| POST | `/api/pipeline/gstr1` | Queue GSTR-1 generation for a period |
+| GET | `/api/pipeline/tasks/<task_id>` | Poll a pipeline task |
 
 ### `/api/ledger` — `ledger_api.py`
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/ledger/trial-balance` | Trial balance as of a date |
-| GET | `/api/ledger/export` | Excel export of the ledger |
-| POST | `/api/ledger/close-period` | Close the current fiscal period, carry forward balances |
-| GET | `/api/ledger/periods` | List fiscal periods |
+| GET | `/api/ledger/trial-balance?as_on=YYYY-MM-DD` | Trial balance as of a date |
 
-### `/api/tds` — `tds_api.py`
+### `/api/reports` — `report_api.py`
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/tds` | TDS register for a period |
-| GET | `/api/tds/export` | Excel / Form 26Q export |
-
-### `/api/gstr1` — `gstr1_api.py`
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/gstr1/<period_label>/generate` | Build/rebuild GSTR-1 for a period (async) |
-| GET | `/api/gstr1/task_status/<task_id>` | Poll build status |
-| GET | `/api/gstr1/<period_label>` | Fetch the built GSTR-1 data |
-| GET | `/api/gstr1/<period_label>/export` | Excel export |
+| POST | `/api/reports/bank-reconciliation` | Queue a bank reconciliation Excel report |
+| POST | `/api/reports/gstr1` | Queue a GSTR-1 Excel report |
+| POST | `/api/reports/journal` | Queue a journal Excel report for a date range |
+| POST | `/api/reports/ledger` | Queue a ledger Excel report as of a date |
+| POST | `/api/reports/tds` | Queue a TDS/Form 26Q report for a date range |
+| GET | `/api/reports/tasks/<task_id>` | Poll report generation status |
+| GET | `/api/reports/tasks/<task_id>/download` | Download a completed report |
 
 All routes above except `/auth/register` and `/auth/login` require a valid `Authorization: Bearer <JWT>` header.
 
@@ -393,17 +384,20 @@ All routes above except `/auth/register` and `/auth/login` require a valid `Auth
 
 ## 9. Background jobs (Celery)
 
-Two task modules, registered in `app/celery.py` (`broker`/`backend` = Redis, timezone `Asia/Kolkata`):
+The task modules registered in `app/celery.py` use Redis for both the broker and result backend, with timezone `Asia/Kolkata`:
 
-- **`tasks/bank_rec_task.py`**
+- **`tasks/bank_rec.py`**
   - `process_pre_data` — persists uploaded bank/ledger rows before matching
   - `run_reconciliation_pipeline` — runs the full matcher pipeline (§5.1) end-to-end
   - `process_post_data` — persists match results, ignored records, and audit items
-  - `generate_report_from_db` — regenerates the `.xlsx` report from stored results
-  - All tasks are `bind=True, max_retries=3` with a 5-second retry backoff on exception.
+  - Tasks retry up to three times with a 10-second delay on exception.
 
-- **`tasks/bill_pipeline_task.py`**
-  - `process_bill_task` — runs OCR (if an image/PDF was uploaded) → invoice field extraction → direction classification (`input`/`output`) → journal entry construction → TDS engine pass → persists everything, updating the `BillModel` status along the way.
+- **`tasks/bill_pipeline.py`**
+  - `process_bill` — runs OCR (if an image/PDF was uploaded) → invoice field extraction → direction classification (`input`/`output`) → journal entry construction → TDS engine pass → persists everything.
+  - `generate_gstr1` — builds GSTR-1 data for a user and period.
+
+- **`tasks/generate_report_tasks.py`**
+  - `generate_report_bank_rec`, `generate_report_gstr1`, `generate_report_journal`, `generate_ledger_report`, and `generate_tds_reprot` — generate the corresponding Excel reports.
 
 Run a worker with:
 ```bash
@@ -422,12 +416,13 @@ Set these in a `.env` file in `Backend/` (loaded via `python-dotenv`) or as real
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_DB` | — | — | Alternative to `DATABASE_URL`; assembled into a connection string |
 | `SECRET_KEY` | **yes** | — | Flask secret key |
 | `JWT_SECRET_KEY` | **yes** | — | JWT signing key |
-| `EMAIL_OTP_SALT` | for email verification flows | — | Salt for `itsdangerous` signed tokens |
-| `CORS_ALLOWED_ORIGINS` | recommended | *(unset = allow all)* | Comma-separated list of allowed frontend origins |
 | `REDIS_URL` | **yes** | — | Celery broker + result backend, e.g. `redis://redis_server:6379/0` |
-| `CACHE_TYPE` / `CACHE_DEFAULT_TIMEOUT` | no | — | Flask-Caching backend config |
-| `STORAGE_DIR` | no | `<Backend>/storage` | Where generated reports are written |
-| `BILL_UPLOAD_FOLDER` | no | system temp dir | Where uploaded bill images/PDFs are stored |
+| `OLLAMA_URL` | no | local `http://127.0.0.1:11434` or Docker `http://ollama:11434` | Ollama server URL |
+| `OLLAMA_NAME` | no | `phi3:latest` | Ollama model used by the matcher |
+| `STORAGE_DIR` | no | `<Backend>/storage` or `/data/uploads` in Docker | Where uploads and generated reports are written |
+| `BILL_UPLOAD_FOLDER` | no | `/data/uploads` | Bill upload directory; also used as the storage fallback |
+| `POOL_WORKERS` | no | — | Optional database worker-pool setting |
+| `DEBUG` / `ALGORITHM` / `LOG_FILE` / `LOG_FORMAT` | no | see `core/config.py` | Runtime and logging configuration |
 | `LOG_TDS` | no | — | Verbose TDS-engine logging toggle |
 | `VITE_API_BASE_URL` (frontend, in `Frontend/.env.local`) | recommended | `http://localhost:8000` | Backend base URL the SPA calls |
 
@@ -445,7 +440,7 @@ From `Backend/`:
 docker compose up --build
 ```
 
-This starts four services: `postgres_db` (Postgres 15), `redis_server` (Redis 7), `backend` (Flask API on `:8000`), and `worker` (Celery worker). The database is auto-created on first boot (`ensure_database_exists()` in `core/config.py`).
+This starts five services: `postgres_db` (Postgres 15), `redis_server` (Redis 7), `backend` (Flask API on `:8000`), `worker` (Celery worker), and `ollama` (local LLM server on `:11434`). The database is auto-created on first boot (`ensure_database_exists()` in `core/config.py`).
 
 > The bundled `docker-compose.yml` ships with placeholder Postgres credentials and generated-looking secret keys for convenience — **replace them** before any non-local use.
 
@@ -491,7 +486,7 @@ ollama pull phi3
 ollama serve      # listens on http://127.0.0.1:11434 by default
 ```
 
-`Backend/README.md` additionally references downloading Phi-3.5-mini-instruct weights directly from Hugging Face (`microsoft/Phi-3.5-mini-instruct`) — this is only needed if you intend to run inference outside of Ollama's own model management. For the default `ai_matcher.py` code path, `ollama pull phi3` is sufficient.
+For the default `ai_matcher.py` code path, `ollama pull phi3:latest` is sufficient; Ollama manages the model weights itself.
 
 If Ollama isn't running, the AI-matcher stage will fail to produce matches — the pipeline still functions using exact/fuzzy/memory matching, but ambiguous transactions will fall through to the residual reconciler / manual review instead.
 
@@ -521,7 +516,7 @@ State is split across four Pinia stores: `auth` (session/JWT), `ledgerSuite` (jo
 
 ## 13. Deployment notes
 
-- Frontend and backend are designed to be deployed **separately** (see `Frontend/.env.example`, which references Vercel by name for the frontend). Set `VITE_API_BASE_URL` to the backend's public URL, and set `CORS_ALLOWED_ORIGINS` on the backend to the frontend's deployed origin.
+- Frontend and backend are designed to be deployed **separately**. Set `VITE_API_BASE_URL` to the backend's public URL in the frontend environment.
 - The backend needs persistent storage for `STORAGE_DIR` (generated reports) and `BILL_UPLOAD_FOLDER` (uploaded bill images) — in Docker Compose these are named volumes; in a multi-instance deployment they should be a shared network volume or object storage, not local disk.
 - PaddleOCR and Ollama both add non-trivial container size and startup time / memory footprint — budget for this in whatever compute you deploy on (CPU inference for both OCR and the LLM fallback).
 
@@ -532,11 +527,10 @@ State is split across four Pinia stores: `auth` (session/JWT), `ledgerSuite` (jo
 The codebase gets a lot right (bcrypt hashing, per-tenant scoping, `secure_filename` + extension allow-lists on uploads, parameterized queries via the ORM). Before shipping this beyond local development, address the following:
 
 - [ ] **Rotate the secrets committed in `docker-compose.yml`.** The checked-in `SECRET_KEY` / `JWT_SECRET_KEY` and default `postgres/postgres` DB credentials are real values sitting in source control — treat them as already compromised.
-- [ ] **Turn off Flask debug mode in `main.py`.** `app.run(..., debug=True, use_reloader=True)` enables the Werkzeug interactive debugger, which allows remote code execution if an unhandled exception is ever reachable from the outside. Use a production WSGI server (gunicorn/uvicorn-equivalent) instead of `main.py`'s dev server.
+- [ ] **Turn off Flask debug mode in `main.py`.** `app.run(..., debug=True)` enables the Werkzeug interactive debugger, which allows remote code execution if an unhandled exception is ever reachable from the outside. Use a production WSGI server instead of `main.py`'s dev server.
 - [ ] **Don't expose Postgres/Redis ports to the host** (`5432`/`6379` in `docker-compose.yml`) in any environment reachable beyond your own machine.
 - [ ] **Add rate limiting to `/auth/login` and `/auth/register`** — there is currently no brute-force protection.
 - [ ] **Move the JWT off `localStorage`** on the frontend (or add short expiries + refresh-token rotation) to reduce blast radius from any XSS.
-- [ ] **Set `CORS_ALLOWED_ORIGINS` explicitly** — the app falls back to allowing all origins with only a log warning if it's unset.
 - [ ] Remove leftover debug `print(...)` statements from request-handling code paths (e.g. `api/bank_rec_api.py`).
 - [ ] Don't commit generated artifacts (the sample `.xlsx` files currently under `Backend/storage/`) or pin frontend dependencies to `"latest"` — both undermine reproducible, auditable deploys.
 

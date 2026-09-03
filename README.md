@@ -1,536 +1,172 @@
-# FinSync — Bank Reconciliation & Indian Tax Compliance Platform
+# FinSync backend
 
-FinSync is a full-stack, multi-tenant accounting back-office system built around one core workflow — **bank reconciliation** — and extended into a complete Indian statutory-compliance suite: general ledger, journal posting, TDS (Tax Deducted at Source) computation, and GSTR-1 filing exports. It also includes an OCR-driven bill/invoice ingestion pipeline that turns scanned images or PDFs into structured, tax-aware journal entries automatically.
+The FinSync backend is a Flask API for bank reconciliation, bill processing, ledger reporting, TDS, and GSTR-1 workflows. Long-running reconciliation, OCR, and report work is run by Celery with Redis; PostgreSQL stores application data.
 
-The system is split into two independently deployable parts:
+## Components
 
-| Layer | Stack | Location |
-|---|---|---|
-| **Backend** | Python 3.11, Flask, SQLAlchemy, Celery, Redis, PostgreSQL | `Backend/` |
-| **Frontend** | Vue 3, Vite, Pinia, Tailwind CSS | `Frontend/` |
+| Component | Responsibility |
+| --- | --- |
+| `api/` | Flask blueprints and request validation |
+| `service/` | Application workflows, persistence, report generation, and ledger rebuilds |
+| `tasks/` | Celery tasks for reconciliation, bills, GSTR-1, and reports |
+| `matcher/` | Exact, fuzzy, memory, AI-assisted, and residual reconciliation stages |
+| `entry_point/` | Bank/ledger file loading, OCR, and invoice extraction |
+| `ledger/` | Journal, general-ledger, TDS, and GSTR-1 domain logic |
+| `database/` | SQLAlchemy models, database manager, and authentication models |
+| `schema/` | Domain data structures used by the pipelines |
 
----
+The matcher and ledger packages have their own implementation notes: [matcher/README.md](matcher/README.md) and [ledger/README.md](ledger/README.md).
 
-## Table of Contents
+## Architecture
 
-1. [What it does](#1-what-it-does)
-2. [High-level architecture](#2-high-level-architecture)
-3. [Tech stack](#3-tech-stack)
-4. [Project structure](#4-project-structure)
-5. [Core subsystems, in depth](#5-core-subsystems-in-depth)
-   - 5.1 [Bank reconciliation engine](#51-bank-reconciliation-engine)
-   - 5.2 [Bill/Invoice OCR pipeline](#52-billinvoice-ocr-pipeline)
-   - 5.3 [Journal & General Ledger](#53-journal--general-ledger)
-   - 5.4 [TDS Engine](#54-tds-engine)
-   - 5.5 [GSTR-1 Engine](#55-gstr-1-engine)
-   - 5.6 [Reporting (Excel exports)](#56-reporting-excel-exports)
-6. [Data model](#6-data-model)
-7. [Authentication & multi-tenancy](#7-authentication--multi-tenancy)
-8. [API reference](#8-api-reference)
-9. [Background jobs (Celery)](#9-background-jobs-celery)
-10. [Environment variables](#10-environment-variables)
-11. [Getting started](#11-getting-started)
-    - 11.1 [Docker Compose (recommended)](#111-docker-compose-recommended)
-    - 11.2 [Manual / local setup](#112-manual--local-setup)
-    - 11.3 [Frontend setup](#113-frontend-setup)
-    - 11.4 [Local LLM setup (Ollama + Phi-3.5)](#114-local-llm-setup-ollama--phi-35)
-12. [Frontend application](#12-frontend-application)
-13. [Deployment notes](#13-deployment-notes)
-14. [Security checklist before going to production](#14-security-checklist-before-going-to-production)
+```text
+Client
+  │ JWT-authenticated HTTP requests
+  ▼
+Flask API (`api/`)
+  ├── synchronous reads: user profile, task state, reconciliation results, trial balance
+  └── queued work ──► Redis ──► Celery worker (`tasks/`)
+                                      ├── reconciliation and Excel exports
+                                      ├── bill OCR, extraction, and journal processing
+                                      └── GSTR-1 generation
+                                                │
+                                                ▼
+                                           PostgreSQL
 
----
-
-## 1. What it does
-
-A user (typically an accountant or business owner) can:
-
-- **Upload a bank statement + a general ledger export** (CSV/XLSX) and get an automated reconciliation: which transactions match, which are timing differences, which are unexplained, and a downloadable Excel report.
-- **Upload a photo or PDF of a bill/invoice** and have it OCR'd, classified (GST invoice vs. retail bill, inter-state vs. intra-state), converted into a double-entry journal entry, and — where applicable — have TDS automatically deducted and posted.
-- **Browse the general ledger** and pull a trial balance as of any date.
-- **View the TDS register**, broken down by section and deductee, and export data in the NSDL Form 26Q layout.
-- **Generate a GSTR-1 return** for a filing period from the recorded sales invoices.
-- **Close an accounting period**, locking balances and carrying them forward as opening balances for the next period.
-
-Everything is scoped per logged-in user, with an admin role that can see across all users' data (e.g. for an accounting firm managing multiple clients).
-
----
-
-## 2. High-level architecture
-
-```
-                         ┌──────────────────────────┐
-                         │        Frontend          │
-                         │   Vue 3 SPA (Vite)       │
-                         │   Pinia stores + Axios   │
-                         └────────────┬─────────────┘
-                                      │ REST / JWT Bearer
-                                      ▼
-                         ┌──────────────────────────┐
-                         │      Flask API           │
-                         │  (Blueprints per domain) │
-                         │  auth · bank_rec · bills │
-                         │  journal · ledger · tds  │
-                         │  gstr1                   │
-                         └──────┬───────────┬───────┘
-                                │           │
-                     synchronous│           │async dispatch
-                                ▼           ▼
-                    ┌────────────────┐  ┌───────────────────────┐
-                    │  PostgreSQL    │  │   Celery workers      │
-                    │  (SQLAlchemy)  │  │   (broker: Redis)     │
-                    └────────────────┘  │                       │
-                                        │  • tasks.bank_rec     │
-                                        │  • tasks.bill_pipeline│
-                                        │  • tasks.generate_    │
-                                        │    report_tasks       │
-                                        └─────────┬─────────────┘
-                                                  │
-                     ┌────────────────────────────┼───────────────────────┐
-                     ▼                            ▼                       ▼
-           ┌───────────────────┐        ┌─────────────────────┐   ┌───────────────────┐
-           │  Matcher pipeline │        │  PaddleOCR + regex  │   │  TDS / GSTR-1     │
-           │  exact → fuzzy →  │        │  invoice extractor  │   │  engines          │
-           │  memory → AI →    │        │                     │   │                   │
-           │  residual solver  │        │                     │   │                   │
-           └────────┬──────────┘        └──────────┬──────────┘   └──────────┬────────┘
-                    │                              │                         │
-                    ▼                              ▼                         ▼
-           ┌──────────────────────────────────────────────────────────────────────┐
-           │        Ollama (local LLM server, model: phi3:latest) — used only as  │
-           │        fallback matcher for ambiguous bank-vs-ledger pairs           │
-           └──────────────────────────────────────────────────────────────────────┘
+Optional local services: PaddleOCR processes uploaded bills; Ollama is used by the AI matching stage.
 ```
 
-Long-running work (reconciliation runs, OCR + bill posting) is **never done in the request/response cycle** — the API enqueues a Celery task and returns immediately with a run/bill ID; the frontend polls a status endpoint.
+## Requirements
 
----
+- Python `>=3.10,<3.13` (the Docker image uses Python 3.11)
+- PostgreSQL
+- Redis
+- Optional: Ollama with the configured model for AI-assisted matching
+- Optional: Docker and Docker Compose for the containerised stack
 
-## 3. Tech stack
+Dependencies are declared in `pyproject.toml`; `req.txt` is used by the Docker image.
 
-### Backend
-- **Framework:** Flask 3.1 (Blueprint-per-domain), Flask-JWT-Extended for auth, Flask-CORS, Flask-Caching
-- **ORM / DB:** SQLAlchemy 2.0 (declarative, typed `Mapped[...]` columns), PostgreSQL via `psycopg2`, SQLAlchemy-Utils for DB bootstrapping
-- **Async jobs:** Celery 5.6 with Redis as broker + result backend
-- **Validation/config:** Pydantic v2 + `pydantic-settings`
-- **Auth:** `passlib` (bcrypt_sha256) for password hashing, `itsdangerous` for signed tokens, JWT for session auth
-- **OCR:** PaddleOCR (CPU mode) + OpenCV headless
-- **Local LLM inference:** `langchain-ollama` + `ollama` Python client, talking to the configured local Ollama model (`OLLAMA_NAME`, default `phi3:latest`)
-- **Fuzzy string matching:** `rapidfuzz`
-- **Excel I/O:** `openpyxl`, `pandas`
+## Configuration
 
-### Frontend
-- **Framework:** Vue 3 (Composition API), Vite build tool
-- **State:** Pinia stores (`auth`, `ledgerSuite`, `reconciliation`, `toast`)
-- **HTTP:** Axios with request/response interceptors (auto-attaches JWT, global error toasts, auto-logout on 401)
-- **Styling:** Tailwind CSS 3, custom design tokens (dark theme, "beam" gradient backdrops)
-- **Icons:** `@lucide/vue`
-- **Routing:** `vue-router` with a global navigation guard for auth
+Create `Backend/.env`. `Config` loads it at startup.
 
----
+```dotenv
+# Use DATABASE_URL, or provide the full POSTGRES_* set below.
+DATABASE_URL=postgresql://finsync:change-me@localhost:5432/finsync
+# POSTGRES_USER=finsync
+# POSTGRES_PASSWORD=change-me
+# POSTGRES_HOST=localhost
+# POSTGRES_PORT=5432
+# POSTGRES_DB=finsync
 
-## 4. Project structure
+REDIS_URL=redis://localhost:6379/0
+SECRET_KEY=replace-with-a-long-random-value
+JWT_SECRET_KEY=replace-with-a-different-long-random-value
 
-```
-Reconcile/
-├── Backend/
-│   ├── main.py                     # dev entrypoint (Flask app.run)
-│   ├── app/
-│   │   ├── __init__.py             # create_app() factory, blueprint registration
-│   │   └── celery.py               # Celery app instance
-│   ├── core/
-│   │   └── config.py               # Pydantic Settings, DB URL assembly, DB bootstrap
-│   ├── database/
-│   │   ├── base.py                 # SQLAlchemy declarative Base + UUID helper
-│   │   ├── session.py              # session factory / get_session() context manager
-│   │   ├── user.py                 # User model + password hashing
-│   │   ├── security.py             # bcrypt hashing, signed-token helpers
-│   │   ├── bank_rec_model.py       # reconciliation-related ORM models
-│   │   ├── ledger_tax_models.py    # Bill / Journal / TDS / GSTR1 ORM models
-│   │   └── period_model.py         # Fiscal period + carried-forward balances
-│   ├── schema/                     # plain dataclasses (non-ORM) — the "domain" layer
-│   │   ├── bank_rec_schema.py
-│   │   ├── journal_schema.py
-│   │   ├── ledger_schema.py
-│   │   ├── tds_schema.py
-│   │   └── template.py             # known bank-statement column "fingerprints"
-│   ├── entry_point/                # ingestion layer
-│   │   ├── loader.py                # CSV/XLSX → schema objects (bank templates, ledger)
-│   │   ├── bank_processor.py        # bank-statement template auto-detection
-│   │   ├── ocr.py                   # PaddleOCR wrapper
-│   │   └── data_extractor.py        # regex/heuristic invoice field extraction
-│   ├── matcher/                    # the reconciliation engine
-│   │   ├── __init__.py              # orchestrates the full matching pipeline
-│   │   ├── exact_match.py
-│   │   ├── fuzzy_match.py
-│   │   ├── same_side_detect.py
-│   │   ├── memory_match.py           # learns recurring counterparty patterns
-│   │   ├── ai_matcher.py              # Ollama/phi3-backed fallback matcher
-│   │   ├── residual_reconciler.py     # many-to-one / split-transaction solver
-│   │   └── confidence.py
-│   ├── ledger/                     # accounting logic
-│   │   ├── journal.py                # bill → double-entry journal entries
-│   │   ├── ledger.py, general_ledger_class.py
-│   │   ├── opening_balances.py
-│   │   ├── tds.py                    # TDSEngine (see §5.4)
-│   │   ├── gstr1.py                  # GSTR-1 builder (see §5.5)
-│   │   └── helper.py                 # ledger helper functions
-│   ├── service/                    # application services and persistence
-│   │   ├── run_pipelines.py         # bill and reconciliation run services
-│   │   ├── store_bank_rec_data.py   # reconciliation persistence
-│   │   ├── store_ledger_data.py     # ledger persistence
-│   │   ├── rec_journal_posting.py   # approve & post matched entries
-│   │   ├── rebuild_service_ledger.py # period/ledger rebuilds
-│   │   ├── generate_reports.py      # Excel report service
-│   │   └── helper.py                # logging and value/date helpers
-│   ├── tasks/                      # Celery task definitions
-│   │   ├── bank_rec.py
-│   │   ├── bill_pipeline.py
-│   │   └── generate_report_tasks.py
-│   ├── api/                        # Flask blueprints (HTTP layer only)
-│   │   ├── auth.py                  # registration, login, logout, profile
-│   │   ├── bank_rec_api.py          # reconciliation workflow
-│   │   ├── pipeline_api.py          # bills and GSTR-1 pipeline
-│   │   ├── ledger_api.py            # trial balance
-│   │   └── report_api.py            # report tasks and downloads
-│   ├── storage/                      # generated report files land here
-│   ├── docker-compose.yml, Dockerfile, start.sh
-│   └── req.txt / pyproject.toml / uv.lock
-│
-└── Frontend/
-    ├── src/
-    │   ├── main.js, router.js
-    │   ├── api/axios.js                # configured Axios instance
-    │   ├── stores/                     # Pinia: auth, ledgerSuite, reconciliation, toast
-    │   ├── components/                 # NavBar, DataGrid, FileUploadDropzone,
-    │   │                                # JournalEntryReview, MatchBreakdown, etc.
-    │   └── views/                      # one view per major feature (see §12)
-    ├── tailwind.config.js, vite.config.js, postcss.config.js
-    └── package.json
+# Optional
+OLLAMA_URL=http://127.0.0.1:11434
+OLLAMA_NAME=phi3:latest
+STORAGE_DIR=storage
+POOL_WORKERS=1
 ```
 
----
+`DATABASE_URL` takes precedence when it is a PostgreSQL URL. A SQLite URL is accepted for local development, but PostgreSQL is the supported database. `STORAGE_DIR` is created automatically and holds uploaded files and generated reports. In containers, the default storage path is `/data/uploads` and the default Ollama host is `ollama`.
 
-## 5. Core subsystems, in depth
+For Docker Compose, use container hostnames in `.env`:
 
-### 5.1 Bank reconciliation engine
+```dotenv
+POSTGRES_USER=finsync
+POSTGRES_PASSWORD=change-me
+POSTGRES_DB=finsync
+POSTGRES_HOST=postgres_db
+POSTGRES_PORT=5432
+REDIS_URL=redis://redis_server:6379/0
+SECRET_KEY=replace-with-a-long-random-value
+JWT_SECRET_KEY=replace-with-a-different-long-random-value
+```
 
-This is the flagship feature, implemented as a **five-stage cascading pipeline** (`matcher/__init__.py`), where each stage only operates on what the previous stage couldn't resolve:
+## Run locally
 
-1. **Exact match** (`exact_match.py`) — same date (or within tolerance), same amount, correct debit/credit side. Cheapest and most reliable stage; disposes of the majority of well-behaved transactions.
-2. **Fuzzy match** (`fuzzy_match.py`, ~1,100 lines) — handles rounding differences, timing differences (payment recorded a few days apart in bank vs. ledger), and transposition errors, using `rapidfuzz` string similarity on narrations plus configurable amount tolerances per adjustment type:
-   | Adjustment type | Amount tolerance |
-   |---|---|
-   | `EXACT` | ₹0.00 |
-   | `ROUNDING_DIFFERENCE` | ₹2.00 |
-   | `TIMING_DIFFERENCE` | ₹2.00 |
-   | `TRANSPOSITION` | ₹0.00 (digit-swap detection) |
-   | `AI_MATCHER` | ₹5.00 |
-   | `DEFAULT` | ₹1.00 |
-3. **Memory-based match** (`memory_match.py`) — a per-tenant learned dictionary of "this ledger account name + this bank narration pattern have matched before," so recurring counterparties (rent, salary runs, recurring vendor payments) are auto-matched with high confidence on sight.
-4. **AI matcher** (`ai_matcher.py`) — for whatever remains, candidate ledger/bank rows within a configurable date window (`CANDIDATE_DATE_WINDOW_DAYS = 10`, sliding with `WINDOW_OVERLAP_DAYS = 7`, capped at `MAX_CANDIDATES = 12` per window) are sent to a **local** LLM (Ollama running Phi-3.5, `temperature=0.0` for determinism) with a structured-output prompt. The model returns strict Pydantic-validated JSON (`AI1to1Match` / `AIManyToOneMatch`), and anything below `CONFIDENCE_THRESHOLD = 0.75` is discarded rather than trusted. Running this locally (rather than calling a cloud LLM API) means bank statement and ledger data never leaves the deployment — an intentional privacy decision given the sensitivity of the data.
-5. **Residual reconciler** (`residual_reconciler.py`) — for transactions still unmatched after all of the above, attempts many-to-one / split-payment reconciliation (e.g. three ledger invoices summing to one bulk bank credit) and produces a final "audit investigation" list of genuinely unexplained items for human review.
+From `Backend/`:
 
-Every match is annotated with a normalized confidence score (`confidence.py`) — numeric matches are clamped to `[0,1]`, string labels (`"high"/"medium"/"low"`) are mapped to `0.9/0.6/0.3` — and the pipeline produces an overall quality summary (average confidence, % of low-confidence matches, breakdown by adjustment type) so a human reviewer knows how much to trust a given run before approving journal postings from it.
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r req.txt
 
-**Bank statement format detection** (`entry_point/bank_processor.py`) doesn't assume a fixed CSV layout — it scans the first ~25 rows of the uploaded file looking for a header row matching a library of known bank "fingerprints" (`schema/template.py`), falling back to a fuzzy header-overlap score (≥0.6) if no exact fingerprint matches.
+# Start PostgreSQL and Redis, then configure .env as above.
+python main.py
+```
 
-### 5.2 Bill/Invoice OCR pipeline
+In another terminal, with the same virtual environment and configuration:
 
-`entry_point/ocr.py` wraps PaddleOCR (CPU-only, angle-classification enabled) and converts raw OCR output into a sorted list of `Block(x, y, text, confidence)` objects, filtered at a 0.25 confidence threshold.
-
-`entry_point/data_extractor.py` then applies a battery of regex/heuristic extractors on top of those blocks:
-- GSTIN extraction via a strict 15-character regex
-- Date extraction/normalization (via `dateutil`, day-first) across multiple date formats
-- Row-grouping by Y-coordinate (tolerance ±8px) to reconstruct table structure from OCR'd text fragments
-- "Value right of keyword" extraction for line-item labels (invoice number, GST rate, totals)
-- A vendor-noise blocklist (`SKIP_VENDOR`) to avoid misreading boilerplate invoice text ("tax invoice", "e-invoice", "original for recipient", etc.) as the vendor name
-- Invoice classification into `GST Invoice (Intra-state)`, `GST Invoice (Inter-state)`, `GST Invoice`, or `Retail Bill` based on which of CGST/SGST/IGST/GSTIN were detected
-
-The pipeline is deliberately conservative: rather than guessing, extractors return `None` when they can't find a confident match, and the bill is flagged with a `_status` of `"ok"` or `"failed"` (based on whether a positive grand total was extracted) so failed extractions surface for manual correction instead of silently posting bad data.
-
-### 5.3 Journal & General Ledger
-
-`ledger/journal.py` converts a bill dict (or manual entry) into a proper double-entry `JournalEntry` (`schema/journal_schema.py`), against a chart of accounts (`COA`) with a defined `AccountGroup` taxonomy and `DrCr` enum. `ledger/ledger.py` / `general_ledger_class.py` implement `GeneralLedger`, which posts entries and can produce a `TrialBalance` as-of any date. `ledger/opening_balances.py` allows a general ledger to be seeded with carried-forward balances from a prior period; period rebuild and close operations are handled by `service/rebuild_service_ledger.py`.
-
-### 5.4 TDS Engine
-
-`ledger/tds.py` (`TDSEngine`) implements Indian **Income Tax Act, 1961, Chapter XVII-B** TDS logic:
-
-- **Section auto-detection** (`detect_section()`) scans expense account name / narration / hints against a keyword table, e.g.:
-  | Keyword | Section |
-  |---|---|
-  | rent / office rent / building rent | 194I(b) |
-  | plant / machinery / equipment rent | 194I(a) |
-  | professional / advocate / CA / CS / doctor | 194J(b) |
-  | technical / IT service / software service | 194J(a) |
-  | contractor / labour / manpower | 194C |
-  | commission / brokerage / agent fee | 194H |
-  | interest (non-bank) | 194A |
-  | salary / wages | 192 |
-
-  The caller can always override with an explicit `tds_section` to bypass auto-detection — the keyword table is intentionally conservative and only covers clear-cut cases.
-- **Journal adjustment:** when TDS applies, the engine rewrites the journal entry so the net payment goes to Cash/Bank and the deducted amount is routed to a **TDS Payable** account, e.g.:
-  ```
-  Purchase A/c        Dr.   [taxable]
-  Input CGST A/c       Dr.   [cgst]
-  Input SGST A/c       Dr.   [sgst]
-    To Vendor A/c            Cr.   [net_payment]   ← gross − TDS
-    To TDS Payable A/c       Cr.   [tds_amount]
-  ```
-- **Aggregate threshold tracking:** a running per-deductee, per-section total is maintained across the financial year; once a payment causes the total to cross the statutory threshold, TDS is applied from that payment forward and a warning is raised so earlier (under-deducted) payments can be reviewed.
-- **Section 206AA (no-PAN penalty):** if the deductee's PAN is missing or `"PANNOTAVBL"`, the deduction rate is automatically raised to `max(section_rate, 20%)` and flagged `rate_enhanced_206aa = True`.
-- **Deposit tracking:** `mark_deposited()` records the challan BSR code, serial number, and deposit date once TDS is actually paid to the government, moving the register entry to a "deposited" status.
-- **Form 26Q export:** `build_form_26q(quarter, start, end)` assembles the quarterly TDS return in the NSDL line format (note: `section_code` is rendered in NSDL's own notation, e.g. `194Jb` rather than the internal `194J_b`).
-
-### 5.5 GSTR-1 Engine
-
-`ledger/gstr1.py` builds a GSTR-1 return (`GSTR1Record` / period rebuild logic) from posted sales invoices for a given filing period, split by the standard GSTR-1 sections (e.g. B2B, B2C, HSN summary — see the model for the exact fields captured). `PeriodGSTPosition` (in `database/period_model.py`) tracks each period's GST position so it can be carried forward at period close.
-
-### 5.6 Reporting (Excel exports)
-
-Excel reports are generated by `service/generate_reports.py`, using the report modules under `service/reports/`:
-- `bank_recon_xlsx.py` — full reconciliation report (matched/unmatched, by adjustment type, confidence)
-- `journal_xlsx.py` — journal register export
-- `ledger_xlsx.py` — trial balance / ledger export
-- `tds_xlsx.py` — TDS register / Form 26Q export
-- `gstr1_xlsx.py` — GSTR-1 filing export
-
-Generated files are written to `STORAGE_DIR` (see §10) and served back via authenticated download endpoints.
-
----
-
-## 6. Data model
-
-Key tables (see `database/*.py` for full column definitions):
-
-| Model | Table | Purpose |
-|---|---|---|
-| `User` | `user` | Login identity, bcrypt password hash, `role` (`admin`/`user`) |
-| `LedgerFormatModel` | `ledger_format` | Uploaded ledger rows, normalized |
-| `BankStatementModel` | `bank_statement` | Uploaded bank statement rows, normalized |
-| `ReconciliationRunModel` | `reconciliation_run` | One row per reconciliation job (tracks Celery task id, owner, status) |
-| `MatchResultModel` | `match_result` | Individual matched pairs from a run, with adjustment type & confidence |
-| `IgnoredMetadataRecordModel` | `ignored_metadata_record` | Rows explicitly excluded from matching (bank charges, etc.) |
-| `MatchPatternModel` | `match_pattern` | Learned recurring-pattern memory (see §5.1, stage 3) |
-| `AuditInvestigationItemModel` | `audit_investigation_item` | Final unexplained items needing human review |
-| `BillModel` | `bill` | Uploaded bill/invoice, OCR status, extracted fields |
-| `JournalEntryModel` / `JournalLineModel` | `journal_entry` / `journal_line` | Double-entry postings |
-| `TDSEntryModel` / `TDSAggregateModel` | `tds_entry` / `tds_aggregate` | TDS register + running per-deductee/section aggregates |
-| `GSTR1RecordModel` | `gstr1_record` | Per-invoice GSTR-1 line data |
-| `FiscalPeriod` / `PeriodAccountBalance` / `PeriodGSTPosition` / `PeriodTDSPosition` | — | Period-close snapshots carried forward |
-
-All domain-owning tables carry a `user_id` foreign key for tenant isolation (see §7).
-
----
-
-## 7. Authentication & multi-tenancy
-
-- **Auth:** JWT bearer tokens (`Flask-JWT-Extended`), issued on `/auth/login`, required on virtually every API route via `@jwt_required()`.
-- **Passwords:** hashed with `bcrypt_sha256` via `passlib` — never stored or logged in plaintext.
-- **Roles:** two roles — `USER` (default) and `ADMIN`. Role checks are enforced by `role_required()` in `api/auth.py`; there is no public self-promotion endpoint.
-- **Scoping:** service methods receive the authenticated user ID and apply tenant filtering when reading or writing database records. Keep that owner ID propagation intact when extending an API or task.
-
----
-
-## 8. API reference
-
-Base URL prefix per blueprint (registered in `app/__init__.py`):
-
-### `/auth`
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| POST | `/auth/register` | — | Create a user (`password`, `first_name`, `phone_no`, `email`; optional `last_name`, `address`) |
-| POST | `/auth/login` | — | Authenticate with `email` and `password` |
-| GET | `/auth/me` | JWT | Current user profile |
-| POST | `/auth/logout` | JWT | Revoke the current token |
-| DELETE | `/auth/delete` | JWT | Delete the current account |
-
-### `/api/bank-rec` (bank reconciliation) — `bank_rec_api.py`
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/bank-rec/reconciliation` | Upload `ledger_file` + `bank_file` (csv/xlsx), enqueues a Celery run |
-| GET | `/api/bank-rec/reconciliation/<run_id>/status` | Poll Celery task state / run status |
-| GET | `/api/bank-rec/reconciliation/<run_id>` | Full match results once complete |
-| POST | `/api/bank-rec/reconciliation/<run_id>/report` | Queue the Excel report for a run |
-| POST | `/api/bank-rec/reconciliation/<run_id>/journal-entries/approve` | Approve matched entries and post them to the ledger |
-
-### `/api/pipeline` — `pipeline_api.py`
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/pipeline/bills` | Upload a bill image/PDF or raw JSON (`raw_data`), enqueues OCR + journal processing |
-| GET | `/api/pipeline/bills/<bill_id>/status` | Poll bill processing status |
-| POST | `/api/pipeline/gstr1` | Queue GSTR-1 generation for a period |
-| GET | `/api/pipeline/tasks/<task_id>` | Poll a pipeline task |
-
-### `/api/ledger` — `ledger_api.py`
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/ledger/trial-balance?as_on=YYYY-MM-DD` | Trial balance as of a date |
-
-### `/api/reports` — `report_api.py`
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/reports/bank-reconciliation` | Queue a bank reconciliation Excel report |
-| POST | `/api/reports/gstr1` | Queue a GSTR-1 Excel report |
-| POST | `/api/reports/journal` | Queue a journal Excel report for a date range |
-| POST | `/api/reports/ledger` | Queue a ledger Excel report as of a date |
-| POST | `/api/reports/tds` | Queue a TDS/Form 26Q report for a date range |
-| GET | `/api/reports/tasks/<task_id>` | Poll report generation status |
-| GET | `/api/reports/tasks/<task_id>/download` | Download a completed report |
-
-All routes above except `/auth/register` and `/auth/login` require a valid `Authorization: Bearer <JWT>` header.
-
----
-
-## 9. Background jobs (Celery)
-
-The task modules registered in `app/celery.py` use Redis for both the broker and result backend, with timezone `Asia/Kolkata`:
-
-- **`tasks/bank_rec.py`**
-  - `process_pre_data` — persists uploaded bank/ledger rows before matching
-  - `run_reconciliation_pipeline` — runs the full matcher pipeline (§5.1) end-to-end
-  - `process_post_data` — persists match results, ignored records, and audit items
-  - Tasks retry up to three times with a 10-second delay on exception.
-
-- **`tasks/bill_pipeline.py`**
-  - `process_bill` — runs OCR (if an image/PDF was uploaded) → invoice field extraction → direction classification (`input`/`output`) → journal entry construction → TDS engine pass → persists everything.
-  - `generate_gstr1` — builds GSTR-1 data for a user and period.
-
-- **`tasks/generate_report_tasks.py`**
-  - `generate_report_bank_rec`, `generate_report_gstr1`, `generate_report_journal`, `generate_ledger_report`, and `generate_tds_reprot` — generate the corresponding Excel reports.
-
-Run a worker with:
 ```bash
 celery -A app.celery worker --loglevel=info
 ```
 
----
+The Flask development server listens on `http://localhost:8000`.
 
-## 10. Environment variables
+To enable the optional AI matching stage locally:
 
-Set these in a `.env` file in `Backend/` (loaded via `python-dotenv`) or as real environment variables in your deployment.
+```bash
+ollama pull phi3:latest
+ollama serve
+```
 
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `DATABASE_URL` | one of this or the `POSTGRES_*` set | — | Full Postgres URL (or `sqlite:///...` for local dev only) |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_DB` | — | — | Alternative to `DATABASE_URL`; assembled into a connection string |
-| `SECRET_KEY` | **yes** | — | Flask secret key |
-| `JWT_SECRET_KEY` | **yes** | — | JWT signing key |
-| `REDIS_URL` | **yes** | — | Celery broker + result backend, e.g. `redis://redis_server:6379/0` |
-| `OLLAMA_URL` | no | local `http://127.0.0.1:11434` or Docker `http://ollama:11434` | Ollama server URL |
-| `OLLAMA_NAME` | no | `phi3:latest` | Ollama model used by the matcher |
-| `STORAGE_DIR` | no | `<Backend>/storage` or `/data/uploads` in Docker | Where uploads and generated reports are written |
-| `BILL_UPLOAD_FOLDER` | no | `/data/uploads` | Bill upload directory; also used as the storage fallback |
-| `POOL_WORKERS` | no | — | Optional database worker-pool setting |
-| `DEBUG` / `ALGORITHM` / `LOG_FILE` / `LOG_FORMAT` | no | see `core/config.py` | Runtime and logging configuration |
-| `LOG_TDS` | no | — | Verbose TDS-engine logging toggle |
-| `VITE_API_BASE_URL` (frontend, in `Frontend/.env.local`) | recommended | `http://localhost:8000` | Backend base URL the SPA calls |
+## Run with Docker Compose
 
->  **Do not reuse the `SECRET_KEY` / `JWT_SECRET_KEY` values checked into `docker-compose.yml`** — generate your own before deploying anywhere reachable outside your own machine. See §14.
-
----
-
-## 11. Getting started
-
-### 11.1 Docker Compose (recommended)
-
-From `Backend/`:
+Add the Docker configuration values above to `Backend/.env`, then run:
 
 ```bash
 docker compose up --build
 ```
 
-This starts five services: `postgres_db` (Postgres 15), `redis_server` (Redis 7), `backend` (Flask API on `:8000`), `worker` (Celery worker), and `ollama` (local LLM server on `:11434`). The database is auto-created on first boot (`ensure_database_exists()` in `core/config.py`).
+Compose starts `postgres_db`, `redis_server`, `backend`, `worker`, and `ollama`. The API is exposed on port `8000`; Ollama is exposed on `11434`. PostgreSQL and Redis are also currently exposed on `5432` and `6379` for local development.
 
-> The bundled `docker-compose.yml` ships with placeholder Postgres credentials and generated-looking secret keys for convenience — **replace them** before any non-local use.
-
-### 11.2 Manual / local setup
+Pull the model once the Ollama container is healthy:
 
 ```bash
-cd Backend
-python -m venv .venv && source .venv/bin/activate     # or use uv / pyproject.toml
-pip install -r req.txt
-
-# Postgres and Redis must be running and reachable
-export DATABASE_URL=postgresql://user:pass@localhost:5432/finsync
-export REDIS_URL=redis://localhost:6379/0
-export SECRET_KEY=$(openssl rand -hex 32)
-export JWT_SECRET_KEY=$(openssl rand -hex 32)
-
-python main.py            # dev server on :8000
-# in a second terminal:
-celery -A app.celery worker --loglevel=info
+docker compose exec ollama ollama pull phi3:latest
 ```
 
-`start.sh` / `start.bat` are provided as convenience entrypoints for the container/local flows respectively.
+## API overview
 
-### 11.3 Frontend setup
+All routes other than registration and login require `Authorization: Bearer <token>`.
 
-```bash
-cd Frontend
-npm install
-cp .env.example .env.local     # set VITE_API_BASE_URL to your backend
-npm run dev                    # Vite dev server
-# npm run build                # production build
-```
+| Area | Routes | Notes |
+| --- | --- | --- |
+| Authentication | `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `DELETE /auth/delete` | Registration requires `password`, `first_name`, `phone_no`, and `email`. |
+| Reconciliation | `POST /api/bank-rec/reconciliation` | Multipart upload with `ledger_file` and `bank_file`; both must be CSV or XLSX. Returns a Celery task ID. |
+| Reconciliation status/results | `GET /api/bank-rec/reconciliation/<run_id>/status`, `GET /api/bank-rec/reconciliation/<run_id>` | Poll task state, then read persisted reconciliation results. |
+| Reconciliation follow-up | `POST /api/bank-rec/reconciliation/<run_id>/report`, `POST /api/bank-rec/reconciliation/<run_id>/journal-entries/approve` | Queue a run report or approve a non-empty `entries` list. |
+| Bills | `POST /api/pipeline/bills`, `GET /api/pipeline/bills/<bill_id>/status` | Submit multipart `file` (`png`, `jpg`, `jpeg`, or `pdf`) or multipart `raw_data` JSON. `direction` is `input` or `output`. |
+| GSTR-1 pipeline | `POST /api/pipeline/gstr1`, `GET /api/pipeline/tasks/<task_id>` | Requires `period_label`, `period_start`, and `period_end`. |
+| Ledger | `GET /api/ledger/trial-balance?as_on=YYYY-MM-DD` | Returns the trial balance for the requested date. |
+| Reports | `POST /api/reports/{bank-reconciliation,gstr1,journal,ledger,tds}` | Queues an Excel report. Use `GET /api/reports/tasks/<task_id>` to poll and `GET /api/reports/tasks/<task_id>/download` to download it. |
 
-> `package.json` currently pins most dependencies to `"latest"`. For reproducible builds, pin exact versions (or commit a lockfile you trust) before deploying.
+Report request fields:
 
-### 11.4 Local LLM setup (Ollama + Phi-3.5)
+| Endpoint | Required JSON fields |
+| --- | --- |
+| `/api/reports/bank-reconciliation` | `run_id` |
+| `/api/reports/gstr1` | `period_label` |
+| `/api/reports/journal` | `date_from`, `date_to` (`YYYY-MM-DD`) |
+| `/api/reports/ledger` | `as_on` (`YYYY-MM-DD`) |
+| `/api/reports/tds` | `period_start`, `period_end` (`YYYY-MM-DD`) |
 
-The AI-matcher fallback (§5.1, stage 4) requires a local [Ollama](https://ollama.com) server running the `phi3` model:
+## Background work
 
-```bash
-# install Ollama, then:
-ollama pull phi3
-ollama serve      # listens on http://127.0.0.1:11434 by default
-```
+Celery imports these task modules through `app/celery.py` and uses Redis for both broker and result backend:
 
-For the default `ai_matcher.py` code path, `ollama pull phi3:latest` is sufficient; Ollama manages the model weights itself.
+- `tasks.bank_rec`: pre/post persistence helpers and the reconciliation pipeline.
+- `tasks.bill_pipeline`: bill processing and GSTR-1 generation.
+- `tasks.generate_report_tasks`: bank reconciliation, GSTR-1, journal, ledger, and TDS report generation.
 
-If Ollama isn't running, the AI-matcher stage will fail to produce matches — the pipeline still functions using exact/fuzzy/memory matching, but ambiguous transactions will fall through to the residual reconciler / manual review instead.
+Tasks are configured to retry up to three times. Keep the API and worker connected to the same Redis instance and database.
 
----
+## Operational notes
 
-## 12. Frontend application
-
-Views (`src/views/`), each mapped to a route in `router.js`:
-
-| View | Route | Purpose |
-|---|---|---|
-| `AuthView` | `/auth` | Login / register |
-| `LandingView` | `/` | Product landing / entry point |
-| `RunsView` | `/runs` | Reconciliation run history |
-| `ResultsView` | `/results/:runId` | Match breakdown for a specific run, with live refresh |
-| `BillsView` | `/bills` | Bill scanner — upload & track OCR status |
-| `JournalView` | `/journal` | Journal register |
-| `LedgerView` | `/ledger` | Trial balance |
-| `TdsView` | `/tds` | TDS register |
-| `Gstr1View` | `/gstr1` | GSTR-1 filing |
-
-Shared components include `DataGrid` (tabular results), `FileUploadDropzone`, `JournalEntryReview` (approve/edit before posting), `MatchBreakdown` (confidence/adjustment visualization), `NavBar`, `StatCard`, `ToastHost`, and `AppModal`.
-
-State is split across four Pinia stores: `auth` (session/JWT), `ledgerSuite` (journal/ledger/tds/gstr1 data), `reconciliation` (runs/results), and `toast` (global notifications, wired directly into the Axios error interceptor).
-
----
-
-## 13. Deployment notes
-
-- Frontend and backend are designed to be deployed **separately**. Set `VITE_API_BASE_URL` to the backend's public URL in the frontend environment.
-- The backend needs persistent storage for `STORAGE_DIR` (generated reports) and `BILL_UPLOAD_FOLDER` (uploaded bill images) — in Docker Compose these are named volumes; in a multi-instance deployment they should be a shared network volume or object storage, not local disk.
-- PaddleOCR and Ollama both add non-trivial container size and startup time / memory footprint — budget for this in whatever compute you deploy on (CPU inference for both OCR and the LLM fallback).
-
----
-
-## 14. Security checklist before going to production
-
-The codebase gets a lot right (bcrypt hashing, per-tenant scoping, `secure_filename` + extension allow-lists on uploads, parameterized queries via the ORM). Before shipping this beyond local development, address the following:
-
-- [ ] **Rotate the secrets committed in `docker-compose.yml`.** The checked-in `SECRET_KEY` / `JWT_SECRET_KEY` and default `postgres/postgres` DB credentials are real values sitting in source control — treat them as already compromised.
-- [ ] **Turn off Flask debug mode in `main.py`.** `app.run(..., debug=True)` enables the Werkzeug interactive debugger, which allows remote code execution if an unhandled exception is ever reachable from the outside. Use a production WSGI server instead of `main.py`'s dev server.
-- [ ] **Don't expose Postgres/Redis ports to the host** (`5432`/`6379` in `docker-compose.yml`) in any environment reachable beyond your own machine.
-- [ ] **Add rate limiting to `/auth/login` and `/auth/register`** — there is currently no brute-force protection.
-- [ ] **Move the JWT off `localStorage`** on the frontend (or add short expiries + refresh-token rotation) to reduce blast radius from any XSS.
-- [ ] Remove leftover debug `print(...)` statements from request-handling code paths (e.g. `api/bank_rec_api.py`).
-- [ ] Don't commit generated artifacts (the sample `.xlsx` files currently under `Backend/storage/`) or pin frontend dependencies to `"latest"` — both undermine reproducible, auditable deploys.
-
+- `main.py` is a development entrypoint. Run the Flask app behind a production WSGI server for deployment.
+- Persist `STORAGE_DIR` in production; report downloads depend on the generated file still being available there.
+- Replace all example credentials and secrets. Do not expose PostgreSQL or Redis ports outside a trusted network.
+- Flask-CORS is installed but is not configured in the application factory. Configure CORS explicitly if a separately hosted browser client needs cross-origin access.

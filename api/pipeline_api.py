@@ -13,6 +13,7 @@ from werkzeug.utils import secure_filename
 from app.celery import celery_app
 from service import RunBill, _log_call
 from tasks.bill_pipeline import generate_gstr1, process_bill
+from tasks.full_run import run_full_pipeline
 
 
 app = Blueprint("pipeline_api", __name__)
@@ -20,6 +21,7 @@ app = Blueprint("pipeline_api", __name__)
 
 _run_bill: Optional[RunBill] = None
 _allowed_extensions = {"png", "jpg", "jpeg", "pdf"}
+_bank_statement_extensions = {"csv", "xlsx"}
 
 
 def _get_run_bill() -> RunBill:
@@ -112,6 +114,83 @@ def bill_status(bill_id: str):
     return _task_status(bill_id)
 
 
+@app.route("/fullrun", methods=["POST"])
+@jwt_required()
+@_log_call
+def fullrun():
+    """Upload bills and a bank statement for the bill-to-reconciliation flow."""
+    bank_file = request.files.get("bank_statement") or request.files.get("bank_file")
+    bill_files = request.files.getlist("bill_files") or request.files.getlist("bills")
+
+    if not bank_file or not bank_file.filename:
+        return jsonify({
+            "ok": False, 
+            "error": "bank_statement is required"
+        }), 400
+    if not bill_files or not any(f.filename for f in bill_files):
+        return jsonify({
+            "ok": False, 
+            "error": "at least one bill_files upload is required"
+        }), 400
+
+    def _has_extension(filename: str, extensions: set[str]) -> bool:
+        return "." in filename and filename.rsplit(".", 1)[1].lower() in extensions
+
+    if not _has_extension(bank_file.filename, _bank_statement_extensions):
+        return jsonify({
+            "ok": False, 
+            "error": "bank_statement must be CSV or XLSX"
+        }), 400
+    
+    invalid_bills = [
+        f.filename 
+        for f in bill_files 
+        if f.filename and not _has_extension(f.filename, _allowed_extensions)
+    ]
+    
+    if invalid_bills:
+        return jsonify({
+            "ok": False, 
+            "error": "Bills must be PNG, JPG, JPEG, or PDF"
+        }), 400
+
+    config = _get_run_bill().config
+    upload_token = uuid.uuid4().hex[:12]
+    bank_path = os.path.join(
+        config.STORAGE_DIR,
+        f"{upload_token}_bank_{secure_filename(bank_file.filename)}",
+    )
+    bank_file.save(bank_path)
+
+    image_paths = []
+    try:
+        for index, bill_file in enumerate(f for f in bill_files if f.filename):
+            image_path = os.path.join(
+                config.STORAGE_DIR,
+                f"{upload_token}_bill_{index}_{secure_filename(bill_file.filename)}",
+            )
+            
+            bill_file.save(image_path)
+            image_paths.append(image_path)
+            
+    except Exception:
+        for path in [bank_path, *image_paths]:
+            if os.path.exists(path):
+                os.remove(path)
+        raise
+
+    task = run_full_pipeline.apply_async(
+        args=[get_jwt_identity(), image_paths, bank_path],
+    )
+    
+    return jsonify({
+        "ok": True,
+        "run_id": task.id,
+        "task_id": task.id,
+        "status_url": f"/api/pipeline/tasks/{task.id}",
+    }), 202
+
+
 @app.route("/gstr1", methods=["POST"])
 @jwt_required()
 @_log_call
@@ -148,4 +227,3 @@ def generate_gstr1_report():
 @_log_call
 def task_status(task_id: str):
     return _task_status(task_id)
-

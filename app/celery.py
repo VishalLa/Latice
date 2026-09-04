@@ -13,6 +13,7 @@ def create_celery(config: Config) -> Celery:
         include=[
             "tasks.bank_rec",
             "tasks.bill_pipeline",
+            "tasks.full_run",
             "tasks.generate_report_tasks",
         ]
     )
@@ -26,4 +27,3 @@ def create_celery(config: Config) -> Celery:
     return app
 
 celery_app = create_celery(config=Config.from_env())
-

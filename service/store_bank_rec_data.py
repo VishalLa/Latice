@@ -55,6 +55,7 @@ class PushBankRecData:
     def create_run(
         self,
         celery_task_id: Optional[str] = None,
+        user_id: Optional[str] = None,
         bank_name: Optional[str] = None,
         template_version: Optional[str] = None,
         ledger_source: Optional[str] = None,
@@ -65,6 +66,7 @@ class PushBankRecData:
         def _op(session: Session) -> ReconciliationRunModel:
             run = ReconciliationRunModel(
                 celery_task_id=celery_task_id,
+                user_id=user_id,
                 bank_name=bank_name,
                 template_version=template_version,
                 ledger_source=ledger_source,

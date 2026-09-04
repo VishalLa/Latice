@@ -140,6 +140,7 @@ All routes other than registration and login require `Authorization: Bearer <tok
 | Reconciliation status/results | `GET /api/bank-rec/reconciliation/<run_id>/status`, `GET /api/bank-rec/reconciliation/<run_id>` | Poll task state, then read persisted reconciliation results. |
 | Reconciliation follow-up | `POST /api/bank-rec/reconciliation/<run_id>/report`, `POST /api/bank-rec/reconciliation/<run_id>/journal-entries/approve` | Queue a run report or approve a non-empty `entries` list. |
 | Bills | `POST /api/pipeline/bills`, `GET /api/pipeline/bills/<bill_id>/status` | Submit multipart `file` (`png`, `jpg`, `jpeg`, or `pdf`) or multipart `raw_data` JSON. `direction` is `input` or `output`. |
+| Bill-to-bank full run | `POST /api/pipeline/fullrun`, `GET /api/pipeline/tasks/<task_id>` | Upload bill files and a bank statement together. The worker extracts and stores the bills, builds their bank-facing ledger rows, then runs reconciliation. |
 | GSTR-1 pipeline | `POST /api/pipeline/gstr1`, `GET /api/pipeline/tasks/<task_id>` | Requires `period_label`, `period_start`, and `period_end`. |
 | Ledger | `GET /api/ledger/trial-balance?as_on=YYYY-MM-DD` | Returns the trial balance for the requested date. |
 | Reports | `POST /api/reports/{bank-reconciliation,gstr1,journal,ledger,tds}` | Queues an Excel report. Use `GET /api/reports/tasks/<task_id>` to poll and `GET /api/reports/tasks/<task_id>/download` to download it. |
@@ -154,15 +155,38 @@ Report request fields:
 | `/api/reports/ledger` | `as_on` (`YYYY-MM-DD`) |
 | `/api/reports/tds` | `period_start`, `period_end` (`YYYY-MM-DD`) |
 
+### Bill-to-bank full run
+
+`POST /api/pipeline/fullrun` is a multipart endpoint for the end-to-end flow.
+Send one or more bill files under `bill_files` and a CSV or XLSX statement
+under `bank_statement` (the aliases `bills` and `bank_file` are also
+accepted). Bill files may be `png`, `jpg`, `jpeg`, or `pdf`.
+
+```bash
+curl -X POST http://localhost:8000/api/pipeline/fullrun \
+  -H "Authorization: Bearer <token>" \
+  -F "bill_files=@purchase-invoice.jpg" \
+  -F "bill_files=@paid-expense.pdf" \
+  -F "bank_statement=@statement.xlsx"
+```
+
+The response is `202 Accepted` and includes `task_id`, `run_id`, and a
+`status_url`. Poll `GET /api/pipeline/tasks/<task_id>` until it succeeds.
+The completed result includes each bill's processing result, the count of
+bank-reconcilable ledger rows created from its persisted journal entries, and
+the normal reconciliation summary/report links. Only bills with a Cash or
+Bank journal posting produce rows that can be matched to the statement.
+
 ## Background work
 
 Celery imports these task modules through `app/celery.py` and uses Redis for both broker and result backend:
 
 - `tasks.bank_rec`: pre/post persistence helpers and the reconciliation pipeline.
 - `tasks.bill_pipeline`: bill processing and GSTR-1 generation.
+- `tasks.full_run`: bill OCR/extraction, journal persistence, automatic ledger formation, and bank reconciliation in one job.
 - `tasks.generate_report_tasks`: bank reconciliation, GSTR-1, journal, ledger, and TDS report generation.
 
-Tasks are configured to retry up to three times. Keep the API and worker connected to the same Redis instance and database.
+Tasks are configured to retry up to three times, except `tasks.full_run`, which runs once to avoid creating duplicate bills and journal entries. Keep the API and worker connected to the same Redis instance and database.
 
 ## Operational notes
 

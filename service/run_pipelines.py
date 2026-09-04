@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import os
+import uuid
 import dataclasses
 from datetime import date as date_
 from typing import Optional, Any, List, Dict
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from matcher import reconcile
 from ledger import TDSEngine, GSTR1Builder, JournalBuilder
-from database import BillModel
+from database import BillModel, JournalEntryModel
 
 from entry_point.loader import load_bank_statement, load_ledger
 from entry_point.data_extractor import classify_direction, detect_type, parse_invoice
 from entry_point.ocr import Block, get_ocr
+from schema import journal_entries_to_ledger_records
 
 from .store_bank_rec_data import PushBankRecData
 from .store_ledger_data import PushLedgerData
@@ -21,6 +23,7 @@ from .reports.bank_recon_xlsx import write_bank_recon_xlsx
 from .helper import _safe_float, fy_label_for_date
 from ._base import Base
 from .helper import _log_call
+from .rebuild_service_ledger import RebuildServiceLedger
 
 class RunBankRec:
     
@@ -58,6 +61,8 @@ class RunBankRec:
             return [dataclasses.asdict(item) for item in data_list]
         elif hasattr(data_list[0], "to_dict"):
             return [item.to_dict() for item in data_list]
+        elif hasattr(data_list[0], "model_dump"):
+            return [item.model_dump(mode="json") for item in data_list]
         return data_list
     
     
@@ -68,6 +73,9 @@ class RunBankRec:
 
         if dataclasses.is_dataclass(obj):
             return dataclasses.asdict(obj)
+
+        if hasattr(obj, "model_dump") and callable(getattr(obj, "model_dump")):
+            return RunBankRec._deep_serialize(obj.model_dump(mode="json"))
 
         if hasattr(obj, "to_dict") and callable(getattr(obj, "to_dict")):
             try:
@@ -144,9 +152,11 @@ class RunBankRec:
     def run_reconciliation_pipeline(
         self,
         run_id: str,
-        ledger_path: str,
+        ledger_path: Optional[str],
         bank_path: str,
-        date_format: str = "%d-%m-%Y"
+        date_format: str = "%d-%m-%Y",
+        ledger_data: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Full pipeline: load files → reconcile → persist → generate report.
@@ -158,9 +168,13 @@ class RunBankRec:
         and deciding whether/how to retry; see the module docstring at the
         bottom of this file for the expected wrapper shape.
         """
-        print(f"DEBUG: Task received! run_id={run_id} Processing: {ledger_path}")
+        if ledger_data is None and not ledger_path:
+            raise ValueError("ledger_path or ledger_data is required")
+
+        print(f"DEBUG: Task received! run_id={run_id} Processing: {ledger_path or 'in-memory ledger'}")
         
-        ledger_data = load_ledger(filepath=ledger_path, date_format=date_format)
+        if ledger_data is None:
+            ledger_data = load_ledger(filepath=ledger_path, date_format=date_format)
         bank_data = load_bank_statement(filepath=bank_path)
         
         gl_records = ledger_data.get("records", [])
@@ -173,6 +187,7 @@ class RunBankRec:
         try:
             run_row = self.bank_rec_service.create_run(
                 celery_task_id=run_id,
+                user_id=user_id,
                 bank_name=bank_data.get("bank_name"),
                 template_version=bank_data.get("template_version"),
                 ledger_source=ledger_data.get("source"),
@@ -271,10 +286,10 @@ class RunBankRec:
             report_ready = False
         
         
-        self._cleanup_input_files(
-            ledger_path=ledger_path,
-            bank_path=bank_path
-        )
+        if ledger_path:
+            self._cleanup_input_files(ledger_path=ledger_path, bank_path=bank_path)
+        elif os.path.exists(bank_path):
+            os.remove(bank_path)
         
         safe_result = self._deep_serialize(result)
         
@@ -514,4 +529,111 @@ class RunBill:
             }
 
         return self.db_manager.run(_op)
+
+
+class FullRun:
+    def __init__(self) -> None:
+        base = Base()
+        self.db_manager = base.get_manager
+        self.config = base.config
+        self.bull_pipeleine = RunBill()
+        self.bank_rec_pipeline = RunBankRec()
+
+
+    def run_full_pipeline(
+        self,
+        user_id: str,
+        image_paths: List[str],
+        bank_path: str,
+        run_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Process uploaded bills, form their bank-facing ledger, then reconcile it.
+
+        Bills are deliberately persisted and journalised before reconciliation.
+        The reconciliation ledger is rebuilt from those persisted journal
+        entries, so it is an auditable representation of the database ledger.
+        """
+        if not user_id:
+            raise ValueError("user_id is required")
+        if not image_paths:
+            raise ValueError("at least one bill image is required")
+        if not bank_path or not os.path.isfile(bank_path):
+            raise ValueError("bank_path must reference an uploaded bank statement")
+
+        run_id = run_id or uuid.uuid4().hex
+        bill_results: List[Dict[str, Any]] = []
+        processed_bill_ids: List[str] = []
+
+        for image_path in image_paths:
+            if not image_path or not os.path.isfile(image_path):
+                bill_results.append({
+                    "status": "failed",
+                    "source_file": image_path,
+                    "reason": "Uploaded bill file was not found",
+                })
+                continue
+
+            try:
+                extracted = self.bull_pipeleine._run_ocr_and_extract(image_path)
+                bill_id = self.bull_pipeleine.create_bill(
+                    user_id=user_id,
+                    direction=extracted.get("_direction", "input"),
+                    source_file=image_path,
+                    raw_extracted_data=extracted,
+                )
+                
+                result = self.bull_pipeleine.process_bill(bill_id)
+                bill_results.append(result)
+                
+                if result.get("status") == "success":
+                    processed_bill_ids.append(bill_id)
+                    
+            except Exception as exc:
+                bill_results.append({
+                    "status": "failed",
+                    "source_file": image_path,
+                    "reason": str(exc),
+                })
+
+        if not processed_bill_ids:
+            if os.path.exists(bank_path):
+                os.remove(bank_path)
+                
+            raise RuntimeError("No uploaded bill produced a journal entry; reconciliation was not run")
+
+        def _load_entries(session: Session):
+            models = (
+                session.query(JournalEntryModel)
+                .options(joinedload(JournalEntryModel.lines))
+                .filter(
+                    JournalEntryModel.user_id == user_id,
+                    JournalEntryModel.bill_id.in_(processed_bill_ids),
+                )
+                .order_by(JournalEntryModel.date.asc(), JournalEntryModel.id.asc())
+                .all()
+            )
+            return RebuildServiceLedger.rebuild_journal_entries(models)
+
+        journal_entries = self.db_manager.run(_load_entries)
+        ledger_records = journal_entries_to_ledger_records(journal_entries)
+        ledger_data = {
+            "records": ledger_records,
+            "source": "auto",
+            "warnings": ([] if ledger_records else [
+                "No uploaded bill has a Cash/Bank posting; ledger has no bank-reconcilable rows."
+            ]),
+        }
+
+        reconciliation = self.bank_rec_pipeline.run_reconciliation_pipeline(
+            run_id=run_id,
+            ledger_path=None,
+            bank_path=bank_path,
+            ledger_data=ledger_data,
+            user_id=user_id,
+        )
         
+        reconciliation["bills"] = bill_results
+        reconciliation["processed_bills"] = len(processed_bill_ids)
+        reconciliation["ledger_records_created"] = len(ledger_records)
+        
+        return reconciliation

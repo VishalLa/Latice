@@ -1,4 +1,4 @@
-from .run_pipelines import Base, RunBill, RunBankRec
+from .run_pipelines import Base, RunBill, RunBankRec, FullRun
 from .store_bank_rec_data import PushBankRecData
 from .store_ledger_data import PushLedgerData
 from .run_result_service_bank_rec import ResultBankRec
@@ -12,6 +12,7 @@ __all__ = [
     "Base",
     "RunBill",
     "RunBankRec",
+    "FullRun",
     
     "PushBankRecData",
     "PushLedgerData",

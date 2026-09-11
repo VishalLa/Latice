@@ -122,8 +122,8 @@ class LedgerBuilder:
         return TrialBalance(
             lines=lines,
             as_on=self.as_on,
-            total_debit=total_dr,
-            total_credit=total_cr,
+            total_debits=total_dr,
+            total_credits=total_cr,
         )
 
 

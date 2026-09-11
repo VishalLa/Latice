@@ -117,6 +117,23 @@ class BankStatement(SchemaBase):
             return None
         return float(v)
 
+    def to_dict(self) -> dict:
+        """Serialize this parsed bank row for reconciliation outputs."""
+        return {
+            "row_index":        self.row_index,
+            "bank_name":        self.bank_name,
+            "template_version": self.template_version,
+            "date":             self.date,
+            "date_raw":         self.date_raw,
+            "narration":        self.narration,
+            "debit_amount":     self.debit_amount,
+            "credit_amount":    self.credit_amount,
+            "balance":          self.balance,
+            "txn_id":           self.txn_id,
+            "parse_warnings":   self.parse_warnings,
+            "run_id":           self.run_id,
+        }
+
 
 class LedgerFormat(SchemaBase):
     _id_counter:          ClassVar[int] = 1

@@ -273,10 +273,10 @@ class TDSEntry(SchemaBase):
     """True if the rate was raised to 20 % because deductee PAN was absent."""
 
     # Deposit details — populated later when challan is filed
-    deposit_date:      Optional[date] = None
+    deposit_date:      Optional[Date] = None
     challan_bsr_code:  Optional[str]  = None   # 7-digit BSR code of the bank
     challan_serial:    Optional[str]  = None   # challan serial number
-    challan_date:      Optional[date] = None
+    challan_date:      Optional[Date] = None
 
     @property
     def is_deposited(self) -> bool:
@@ -334,8 +334,8 @@ class TDSRegister(SchemaBase):
     """Complete TDS deduction register for a financial year or sub-period."""
 
     entries:       List[TDSEntry]
-    period_start:  date
-    period_end:    date
+    period_start:  Date
+    period_end:    Date
 
     @property
     def total_tds_deducted(self) -> float:
@@ -478,8 +478,8 @@ class Form26Q(SchemaBase):
     """
     quarter:        str           # "Q1" … "Q4"
     financial_year: str           # "2025-26"
-    period_start:   date
-    period_end:     date
+    period_start:   Date
+    period_end:     Date
     lines:          List[Form26QLine] = Field(default_factory=list)
 
     @property

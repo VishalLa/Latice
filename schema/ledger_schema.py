@@ -4,7 +4,7 @@ from datetime import date as Date
 from enum import Enum
 from typing import List
 
-from pydantic import Field, field_validator
+from pydantic import Field, PrivateAttr, field_validator
 
 from .base import SchemaBase
 from .journal_schema import DrCr, Account, AccountGroup
@@ -26,8 +26,8 @@ class LedgerPosting(SchemaBase):
 
 class LedgerAccount(SchemaBase):
     account:    Account
-    posting:    List[LedgerPosting] = Field(default_factory=list)
-    _balance:   float               = Field(default=0.0, init=False, repr=False)
+    postings:   List[LedgerPosting] = Field(default_factory=list)
+    _balance:   float               = PrivateAttr(default=0.0)
 
     @property
     def name(self) -> str:
@@ -59,7 +59,7 @@ class LedgerAccount(SchemaBase):
         bal_abs = abs(round(self._balance, 2))
         bal_side = "Dr" if self._balance >= 0 else "Cr"
 
-        self.posting.append(
+        self.postings.append(LedgerPosting(
             date         = date,
             particulars  = particulars,
             journal_id   = journal_id,
@@ -68,7 +68,7 @@ class LedgerAccount(SchemaBase):
             cr_amount    = cr_amount,
             balance      = bal_abs,
             balance_side = bal_side,
-        )
+        ))
 
     @property
     def closing_balance(self) -> tuple[float, str]:
@@ -76,11 +76,11 @@ class LedgerAccount(SchemaBase):
     
     @property
     def total_debits(self) -> float:
-        return round(sum(p.dr_amount for p in self.posting), 2)
+        return round(sum(p.dr_amount for p in self.postings), 2)
 
     @property
     def total_credits(self) -> float:
-        return  round(sum(p.cr_amount for p in self.posting), 2)
+        return  round(sum(p.cr_amount for p in self.postings), 2)
 
     @property
     def is_debit_balance(self) -> bool:
@@ -125,6 +125,16 @@ class TrialBalance(SchemaBase):
     total_credits:  float
 
     @property
+    def total_debit(self) -> float:
+        """Compatibility alias for consumers using the singular field name."""
+        return self.total_debits
+
+    @property
+    def total_credit(self) -> float:
+        """Compatibility alias for consumers using the singular field name."""
+        return self.total_credits
+
+    @property
     def is_balanced(self) -> bool:
         return abs(self.total_debits - self.total_credits) < TRAILBALANCE_TOLARANCE
 
@@ -136,8 +146,8 @@ class TrialBalance(SchemaBase):
         return {
             "as_on":        self.as_on.strftime("%d-%m-%Y"),
             "is_balanced":  self.is_balanced,
-            "total_debit":  self.total_debit,
-            "total_credit": self.total_credit,
+            "total_debit":  self.total_debits,
+            "total_credit": self.total_credits,
             "difference":   self.difference,
             "lines": [
                 {

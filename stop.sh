@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_DIR"
 
 stop_processes() {
     local label="$1"
@@ -29,6 +30,15 @@ stopped_any=0
 stop_processes "CLI" "${PROJECT_DIR}/main\.py" || stopped_any=1
 stop_processes "Celery" "celery -A app\.celery worker" || stopped_any=1
 stop_processes "Ollama" "ollama serve" || stopped_any=1
+
+if [[ ! -f "/.dockerenv" ]] && docker compose version &>/dev/null; then
+    docker_services="$(docker compose ps -q redis_server ollama)"
+    if [[ -n "$docker_services" ]]; then
+        docker compose stop redis_server ollama
+        echo "Stopped Docker Redis and Ollama containers (images and model volume retained)."
+        stopped_any=1
+    fi
+fi
 
 if [[ "$stopped_any" -eq 0 ]]; then
     echo "No Latice application processes were running."

@@ -20,7 +20,7 @@ def create_celery(config: Config) -> Celery:
     
     app.conf.timezone = "Asia/Kolkata"
     app.conf.task_queues = (
-        Queue("celery")
+        Queue("celery"),
     )
     app.conf.task_default_queue = "celery"
 

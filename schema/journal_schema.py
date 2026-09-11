@@ -4,7 +4,7 @@ import uuid
 from enum import Enum
 from datetime import date as Date
 from typing import List, Optional, Set
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from .base import SchemaBase
 
@@ -65,6 +65,16 @@ class Account(SchemaBase):
     name:       str
     group:      AccountGroup
     gst_code:   Optional[str] = None
+
+    def __init__(
+        self,
+        name: str,
+        group: AccountGroup,
+        gst_code: Optional[str] = None,
+        **data: object,
+    ) -> None:
+        """Allow the concise positional form used by the chart of accounts."""
+        super().__init__(name=name, group=group, gst_code=gst_code, **data)
 
     def __hash__(self) -> int:
         return hash(self.name)
@@ -127,7 +137,7 @@ class COA:
     @classmethod
     def creditor_for(cls, voucher_name: str) -> Account:
         """Vendor-specific Sundry Creditors sub-ledger."""
-        return Account(f"{vendor_name} A/c", AccountGroup.SUNDRY_CREDITORS)
+        return Account(f"{voucher_name} A/c", AccountGroup.SUNDRY_CREDITORS)
 
     @classmethod
     def debtor_for(cls, buyer_name: str) -> Account:
@@ -142,11 +152,28 @@ class COA:
         return cls.CASH
 
 
-class EntryLine:
+class EntryLine(SchemaBase):
     account:    Account
     dr_cr:      DrCr
     amount:     float
     narration:  str = ""
+
+    def __init__(
+        self,
+        account: Account,
+        dr_cr: DrCr,
+        amount: float,
+        narration: str = "",
+        **data: object,
+    ) -> None:
+        """Support existing positional journal-line construction."""
+        super().__init__(
+            account=account,
+            dr_cr=dr_cr,
+            amount=amount,
+            narration=narration,
+            **data,
+        )
 
     @field_validator("amount")
     @classmethod
@@ -169,7 +196,7 @@ class JournalEntry(SchemaBase):
     vendor_name:    str = ""
     direction:      str = ""    # "input" | "output"
 
-    @field_validator(mode="after")
+    @model_validator(mode="after")
     def _validate_double_entry(self) -> "JournalEntry":
         """Assert debits == credits (double-entry rule) across all lines."""
         if not self.lines:
@@ -212,11 +239,11 @@ class JournalEntry(SchemaBase):
         }
 
 
-class ClosingResult:
+class ClosingResult(SchemaBase):
     entries:        List[JournalEntry]  = Field(default_factory=list)
     gross_profit:   float               = 0.0
     net_profit:     float               = 0.0
-    period_end:     Optional[date]      = None
+    period_end:     Optional[Date]      = None
     period_label:   str                 = ""
     warning:        List[str]           = Field(default_factory=list)
 

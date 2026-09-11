@@ -21,8 +21,8 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from schema import AccountGroup, CashBookLine
-from ledger.ledger import GeneralLedger, TrialBalance, trial_balance, extract_cash_book
+from schema import AccountGroup, CashBookLine, TrialBalance
+from ledger import GeneralLedger, LedgerBuilder
 
 # ── Colour palette ───────────────────────────────────────────────────────────
 C_HEADER_BG  = "1E3A5F"
@@ -325,8 +325,9 @@ def write_ledger_xlsx(
     wb   = openpyxl.Workbook()
     wb.remove(wb.active)
 
-    tb   = trial_balance(gl, as_on=as_on)
-    cb   = extract_cash_book(gl)
+    builder = LedgerBuilder(gl=gl, as_on=as_on)
+    tb = builder.trial_balance()
+    cb = builder.extract_cash_book()
 
     _write_trial_balance(wb, tb)
     _write_ledger_accounts(wb, gl)

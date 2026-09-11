@@ -51,6 +51,19 @@ class PushBankRecData:
         self.db_manager = db_manager
 
 
+    @staticmethod
+    def _bank_statement_payload(
+        data: Dict[str, Any], 
+        run_id: Optional[int]
+    ) -> Dict[str, Any]:
+        """Translate parsed schema field names to the database column names."""
+        payload = _coerce_row_dates(data, ["date"])
+        payload["debit"] = payload.pop("debit_amount", payload.get("debit", 0.0))
+        payload["credit"] = payload.pop("credit_amount", payload.get("credit", 0.0))
+        payload["run_id"] = run_id
+        return payload
+
+
     @_log_db_errors("creating reconciliation run")
     def create_run(
         self,
@@ -123,7 +136,7 @@ class PushBankRecData:
 
         def _op(session: Session) -> bool:
             db_statements = [
-                BankStatementModel(**{**_coerce_row_dates(data, ["date"]), "run_id": run_id})
+                BankStatementModel(**self._bank_statement_payload(data, run_id))
                 for data in statements_data
             ]
             session.add_all(db_statements)
@@ -165,7 +178,7 @@ class PushBankRecData:
         
         def _op(session: Session) -> bool:
             db_statements = [
-                BankStatementModel(**{**_coerce_row_dates(data, ["date"]), "run_id": run_id})
+                BankStatementModel(**self._bank_statement_payload(data, run_id))
                 for data in statements_data
             ]
 

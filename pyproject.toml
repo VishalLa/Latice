@@ -28,6 +28,7 @@ dependencies = [
     "pydantic==2.13.4",
     "pydantic-settings==2.14.2",
     "pyjwt==2.13.0",
+    "pytest>=9.1.1",
     "python-dateutil==2.9.0.post0",
     "python-dotenv==1.2.2",
     "rapidfuzz==3.14.5",

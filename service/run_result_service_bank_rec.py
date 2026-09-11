@@ -107,8 +107,8 @@ class ResultBankRec:
     
         
     
-    @_log_db_errors("finding internal run record")
     @staticmethod
+    @_log_db_errors("finding internal run record")
     def _find_run_internal(
         session: Session, 
         run_id: str, 
@@ -155,8 +155,8 @@ class ResultBankRec:
         return run
     
     
-    @_log_db_errors("building match results")
     @staticmethod
+    @_log_db_errors("building match results")
     def _build_matches(
         run: ReconciliationRunModel
     ) -> List[Dict[str, Any]]:
@@ -178,8 +178,8 @@ class ResultBankRec:
         return matches
     
     
-    @_log_db_errors("building ledger objects")
     @staticmethod
+    @_log_db_errors("building ledger objects")
     def _build_ledger_objs(
         session: Session, 
         run: ReconciliationRunModel
@@ -205,8 +205,8 @@ class ResultBankRec:
         return gl_objs
     
     
-    @_log_db_errors("building bank objects")
     @staticmethod
+    @_log_db_errors("building bank objects")
     def _build_bank_objs(
         session: Session, 
         run: ReconciliationRunModel
@@ -220,8 +220,8 @@ class ResultBankRec:
                 date=bs.date.isoformat() if bs.date else None,
                 date_raw=bs.date_raw,
                 narration=bs.narration or "",
-                debit=bs.debit,
-                credit=bs.credit,
+                debit_amount=bs.debit,
+                credit_amount=bs.credit,
                 balance=bs.balance,
                 txn_id=bs.txn_id,
                 parse_warnings=bs.parse_warnings or [],
@@ -230,8 +230,8 @@ class ResultBankRec:
         return bank_objs
     
     
-    @_log_db_errors("fetching internal run bundle")
     @staticmethod
+    @_log_db_errors("fetching internal run bundle")
     def _fetch_run_bundle_internal(
         session: Session, 
         run_id: str, 

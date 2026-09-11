@@ -139,7 +139,7 @@ class UserService:
             return result
         
         result["access_token"] = create_access_token(identity=result["user"]["id"])
-        result["role"] = result["user"]["role"].value
+        result["role"] = result["user"]["role"]
         return result
     
     

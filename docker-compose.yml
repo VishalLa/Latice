@@ -7,6 +7,11 @@ services:
       - .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 3s
+      timeout: 3s
+      retries: 5
     networks:
       - backend_network
   
@@ -34,7 +39,7 @@ services:
       - .env
     depends_on:
       postgres_db:
-        condition: service_started
+        condition: service_healthy
       redis_server:
         condition: service_healthy
       ollama:
@@ -53,7 +58,7 @@ services:
       - .env
     depends_on:
       postgres_db:
-        condition: service_started
+        condition: service_healthy
       redis_server:
         condition: service_healthy
       ollama:

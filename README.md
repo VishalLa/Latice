@@ -82,6 +82,7 @@ POOL_WORKERS=1
 ```
 
 `DATABASE_URL` takes precedence when it is a PostgreSQL URL. A SQLite URL is accepted for local development, but PostgreSQL is the supported database. `STORAGE_DIR` is created automatically and holds uploaded files and generated reports. In containers, the default storage path is `/data/uploads` and the default Ollama host is `ollama`.
+Access tokens are valid for 12 hours. Generated reports are stored under `STORAGE_DIR/reports`, which must be on shared storage mounted by both the API and Celery worker.
 `CORS_ALLOWED_ORIGINS` accepts `*` to allow any origin or a comma-separated list of origins, such as `http://localhost:5173,https://app.example.com`. If unset, cross-origin requests are not enabled.
 On startup, the backend adds the `email_verified` column to an older `user` table if needed. Existing accounts are marked verified so this schema upgrade does not lock them out.
 Ledger IDs are unique within a reconciliation run, rather than across the entire database. On startup, the backend migrates the older global `ledger_id` constraint for PostgreSQL and SQLite databases.
@@ -152,6 +153,7 @@ All routes other than registration and login require `Authorization: Bearer <tok
 | Authentication | `POST /auth/register`, `POST /auth/login`, `GET /auth/verify-email?token=...`, `POST /auth/logout`, `GET /auth/me`, `DELETE /auth/delete` | An unverified user receives a verification link on login and cannot obtain a JWT until verified. Registration requires `password`, `first_name`, `phone_no`, and `email`. |
 | Reconciliation | `POST /api/bank-rec/reconciliation` | Multipart upload with `ledger_file` and `bank_file`; both must be CSV or XLSX. Returns a Celery task ID. |
 | Reconciliation status/results | `GET /api/bank-rec/reconciliation/<run_id>/status`, `GET /api/bank-rec/reconciliation/<run_id>` | Poll task state, then read persisted reconciliation results. |
+| Saved reconciliation runs | `GET /api/bank-rec/previous/runs/<user_id>`, `GET /api/bank-rec/previous/runs/<user_id>/<run_id>`, `DELETE /api/bank-rec/previous/runs/<user_id>/<run_id>` | JWT identity must match `user_id`. Deletion removes the run's reconciliation rows and stored input/report files; posted journal entries are retained but detached from the deleted run. Processing runs cannot be deleted. |
 | Reconciliation follow-up | `POST /api/bank-rec/reconciliation/<run_id>/report`, `POST /api/bank-rec/reconciliation/<run_id>/journal-entries/approve` | Queue a run report or approve a non-empty `entries` list. |
 | Bills | `POST /api/pipeline/bills`, `GET /api/pipeline/bills/<bill_id>/status` | Submit multipart `file` (`png`, `jpg`, `jpeg`, or `pdf`) or multipart `raw_data` JSON. `direction` is `input` or `output`. |
 | Bill-to-bank full run | `POST /api/pipeline/fullrun`, `GET /api/pipeline/tasks/<task_id>` | Upload bill files and a bank statement together. The worker extracts and stores the bills, builds their bank-facing ledger rows, then runs reconciliation. |

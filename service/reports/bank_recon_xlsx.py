@@ -113,8 +113,8 @@ def _ledger_row(rec: LedgerFormat) -> tuple:
     )
 
 def _bank_row(rec: BankStatement) -> tuple:
-    amount    = rec.debit or rec.credit
-    direction = "Debit" if rec.debit > 0 else "Credit"
+    amount    = rec.debit_amount or rec.credit_amount
+    direction = "Debit" if rec.debit_amount > 0 else "Credit"
     return (
         str(rec.row_index),
         rec.date or rec.date_raw or "",

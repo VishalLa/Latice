@@ -108,12 +108,18 @@ def run_status(run_id: str):
 @_log_call
 def run_result(run_id: str):
     _, result_service, _ = _services()
-    result = result_service.get_run_result(
-        run_id=run_id, 
-        user_id=get_jwt_identity()
+    result = result_service.get_run_for_user(
+        run_id=run_id,
+        user_id=str(get_jwt_identity()),
+        include_records=False,
     )
-    state = result.get("state")
-    return jsonify(result), 200 if state == "SUCCESS" else 202 if state in {"PENDING", "STARTED"} else 500
+    if result is None:
+        return jsonify({
+            "ok": False,
+            "error": "Run not found",
+        }), 404
+
+    return jsonify(result), 200
 
 
 @app.route("/reconciliation/<run_id>/report", methods=["POST"])
@@ -233,3 +239,37 @@ def get_previous_run(user_id: str, run_id: str):
         }), 404
 
     return jsonify(run), 200
+
+
+@app.route("/previous/runs/<user_id>/<run_id>", methods=["DELETE"])
+@jwt_required()
+@_log_call
+def delete_previous_run(user_id: str, run_id: str):
+    authenticated_user_id = str(get_jwt_identity())
+    if user_id != authenticated_user_id:
+        return jsonify({
+            "ok": False,
+            "error": "Not authorized to delete this run",
+        }), 403
+
+    _, result_service, _ = _services()
+    result = result_service.delete_run_for_user(
+        user_id=authenticated_user_id,
+        run_id=run_id,
+    )
+    if result is None:
+        return jsonify({
+            "ok": False,
+            "error": "Run not found",
+        }), 404
+    if not result["deleted"]:
+        return jsonify({
+            "ok": False,
+            "error": "A reconciliation that is still processing cannot be deleted",
+        }), 409
+
+    return jsonify({
+        "ok": True,
+        "deleted": True,
+        "cleanup_warnings": result["cleanup_warnings"],
+    }), 200

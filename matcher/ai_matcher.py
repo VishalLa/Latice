@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -147,8 +146,14 @@ class AIMatcher:
                 ),
             )
 
-            gl_ctx = [_format_record_for_prompt(asdict(r), False) for r in gl_chunk[:MAX_RECORDS_PER_WINDOW]]
-            bk_ctx = [_format_record_for_prompt(asdict(r), True) for r in bk_chunk[:MAX_RECORDS_PER_WINDOW]]
+            gl_ctx = [
+                _format_record_for_prompt(r.model_dump(), False)
+                for r in gl_chunk[:MAX_RECORDS_PER_WINDOW]
+            ]
+            bk_ctx = [
+                _format_record_for_prompt(r.model_dump(), True)
+                for r in bk_chunk[:MAX_RECORDS_PER_WINDOW]
+            ]
 
             if not gl_ctx or not bk_ctx:
                 current_start += window_step
@@ -250,8 +255,11 @@ class AIMatcher:
             if not candidates:
                 continue
 
-            ctx_ledger = "\n".join(_format_record_for_prompt(asdict(g), False) for g in candidates)
-            ctx_bank = _format_record_for_prompt(asdict(bank), True)
+            ctx_ledger = "\n".join(
+                _format_record_for_prompt(g.model_dump(), False)
+                for g in candidates
+            )
+            ctx_bank = _format_record_for_prompt(bank.model_dump(), True)
 
             raw = chain.invoke({
                 "tol": f"{self.tol:.2f}",

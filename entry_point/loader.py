@@ -127,46 +127,46 @@ def _file_extension(filepath: str) -> str:
 # Ledger column aliases
 # ---------------------------------------------------------------------------
 
-_LEDGER_ALIASES: Dict[str, set] = {
-    "transaction_date": {
+_LEDGER_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "transaction_date": (
         "transaction_date", "date", "txn date", "txn_date",
         "voucher date", "entry date",
-    },
-    "account_name": {
+    ),
+    "account_name": (
         "account_name", "particulars", "description",
         "narration", "details", "ledger name",
-    },
-    "debit_amount": {
+    ),
+    "debit_amount": (
         "debit_amount", "debit", "dr", "withdrawal",
         "withdrawl", "paid", "debit amount",
-    },
-    "credit_amount": {
+    ),
+    "credit_amount": (
         "credit_amount", "credit", "cr", "deposit",
         "received", "credit amount",
-    },
-    "reference_id": {
-        "reference_id", "voucher_no", "voucher no", "ref no",
-        "ref_no", "chq no", "cheque no", "ref", "txn ref",
-    },
-    "ledger_id": {
-        "ledger_id", "id", "sl no", "sr no",
-    },
-    "account_number": {
+    ),
+    "reference_id": (
+        "reference_id", "ref_no", "ref no", "ref", "txn ref",
+        "chq no", "cheque no", "voucher_no", "voucher no",
+    ),
+    "ledger_id": (
+        "ledger_id", "voucher_no", "voucher no", "id", "sl no", "sr no",
+    ),
+    "account_number": (
         "account_number", "account no", "acc no", "account_no",
-    },
+    ),
     # Excel-only extras (ignored gracefully if absent in CSV)
-    "opening_balance": {
+    "opening_balance": (
         "opening_balance", "opening balance", "op balance",
         "ob", "open bal",
-    },
-    "closing_balance": {
+    ),
+    "closing_balance": (
         "closing_balance", "closing balance", "cl balance",
         "cb", "close bal",
-    },
-    "ledger_type": {
+    ),
+    "ledger_type": (
         "ledger_type", "ledger type", "account type",
         "type", "group", "category",
-    },
+    ),
 }
 
 

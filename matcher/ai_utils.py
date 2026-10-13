@@ -84,7 +84,7 @@ def _format_record_for_prompt(
 ) -> str:
     dr_key = "debit_amount"
     cr_key = "credit_amount"
-    id_key = "row_id"    if is_bank else "ledger_id"
+    id_key = "row_index" if is_bank else "ledger_id"
     dt_key = "date"      if is_bank else "transaction_date"
     nm_key = "narration" if is_bank else "account_name"
 

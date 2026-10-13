@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from datetime import date as date_
 from collections import defaultdict
 from typing import Optional, List, Tuple, Dict, Any
@@ -37,13 +36,12 @@ from .helper import _log_call
 
 
 class GenerateReports:
-    EXPORT_DIR = tempfile.gettempdir()
-    
-    
     def __init__(self, db_manager: Optional[DatabaseManager] = None) -> None:
         base = Base(db_manager)
         self.db_manager = base.get_manager
         self.config = base.get_config
+        self.export_dir = os.path.join(self.config.STORAGE_DIR, "reports")
+        os.makedirs(self.export_dir, exist_ok=True)
         self.rebuild_service = RebuildServiceLedger(db_manager=self.db_manager)
         
         
@@ -126,7 +124,7 @@ class GenerateReports:
             return f"No GSTR-1 data found for period {period_label!r}. Generate it first.", False
         
         filename = secure_filename(f"gstr1_{period_label}.xlsx")
-        path = os.path.join(self.EXPORT_DIR, filename)
+        path = os.path.join(self.export_dir, filename)
         write_gstr1_xlsx(result, path)
         
         return path, True
@@ -172,7 +170,7 @@ class GenerateReports:
         entries = self.rebuild_service.rebuild_journal_entries(models=results)
         
         filename = secure_filename(f"journal_{date_from.isoformat()}_{date_to.isoformat()}.xlsx")
-        path = os.path.join(self.EXPORT_DIR, filename)
+        path = os.path.join(self.export_dir, filename)
         write_journal_xlsx(entries, path)
         
         return path, True
@@ -216,7 +214,7 @@ class GenerateReports:
             return "No ledger entries found up to this date", False
         
         filename = secure_filename(f"ledger_{as_on.isoformat()}.xlsx")
-        path = os.path.join(self.EXPORT_DIR, filename)
+        path = os.path.join(self.export_dir, filename)
         write_ledger_xlsx(gl, path, as_on=as_on)
         
         return path, True
@@ -266,7 +264,7 @@ class GenerateReports:
             return f"No TDS entries found for {str(period_start)} to {str(period_end)} period", False
         
         filename = secure_filename(f"tds_register_{period_start.isoformat()}_{period_end.isoformat()}.xlsx")
-        path = os.path.join(self.EXPORT_DIR, filename)
+        path = os.path.join(self.export_dir, filename)
         write_tds_xlsx(reg, path)
         
         return path, True
@@ -291,7 +289,7 @@ class GenerateReports:
         recon_result, gl_objs, bank_objs = fetched
         
         filename = secure_filename(f"bank_rec_{run_id}.xlsx")
-        path = os.path.join(self.EXPORT_DIR, filename)
+        path = os.path.join(self.export_dir, filename)
         write_bank_recon_xlsx(recon_result, gl_objs, bank_objs, path)
                 
         return path, True

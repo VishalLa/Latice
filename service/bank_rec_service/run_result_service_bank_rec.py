@@ -3,19 +3,22 @@ from __future__ import annotations
 import os
 import re
 import dataclasses
+import logging
 
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from core.config import _default_storage_dir
 from database import (
     DatabaseManager,
     
     ReconciliationRunModel,
     LedgerFormatModel,
     BankStatementModel,
-    MatchResultModel
+    MatchResultModel,
+    JournalEntryModel,
 )
 from schema import (
     LedgerFormat as SchemaLedger,
@@ -24,6 +27,9 @@ from schema import (
 from .._base import Base
 from ..reports.bank_recon_xlsx import write_bank_recon_xlsx
 from ..helper import _log_db_errors
+
+logger = logging.getLogger(__name__)
+
 
 class ResultBankRec:
     
@@ -38,6 +44,7 @@ class ResultBankRec:
                 r"^DRAFT \(([^,]+), confidence ([^,]+), source ([^)]+)\):\s*.*?\s-\s(.*)$",
                 re.DOTALL,
             )
+        clean_details = re.sub(r"\s*\|\s*POSTED\s*$", "", details or "", flags=re.IGNORECASE)
         if not details:
             return {
                 "status": None,
@@ -46,7 +53,7 @@ class ResultBankRec:
                 "entry_narrative": None
             }
             
-        match = _DRAFT_DETAILS_RE.match(details.strip())
+        match = _DRAFT_DETAILS_RE.match(clean_details.strip())
         if not match:
             return {
                 "status": None, 
@@ -168,6 +175,7 @@ class ResultBankRec:
         for mr in run.match_results:
             lid = mr.ledger_format.ledger_id if mr.ledger_format else None
             bid = str(mr.bank_statement.row_index) if mr.bank_statement else None
+            details = mr.details
             matches.append({
                 "id": mr.id,
                 "ledger_id": lid,
@@ -177,9 +185,42 @@ class ResultBankRec:
                 "amount": mr.matched_amount,
                 "date": mr.matched_date.isoformat() if mr.matched_date else None,
                 "confidence_score": mr.confidence_score,
-                "details": mr.details,
+                "details": details,
+                "posted": bool(details and re.search(r"\|\s*POSTED\s*$", details, re.IGNORECASE)),
             })
         return matches
+
+    @staticmethod
+    def _build_suggested_journal_entries(
+        matches: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        for match in matches:
+            if match.get("match_type") != "residual_draft":
+                continue
+
+            draft = ResultBankRec._parse_draft_details(match.get("details"))
+            debit_account, credit_account = ResultBankRec._parse_dr_cr_accounts(
+                match.get("adjustment_type")
+            )
+            try:
+                confidence = float(draft["confidence"]) if draft["confidence"] else None
+            except ValueError:
+                confidence = None
+
+            entries.append({
+                "bank_id": match.get("bank_id"),
+                "date": match.get("date"),
+                "amount": match.get("amount"),
+                "debit_account": debit_account,
+                "credit_account": credit_account,
+                "entry_narrative": draft["entry_narrative"],
+                "confidence": confidence,
+                "source": draft["source"],
+                "status": draft["status"],
+                "posted": match.get("posted", False),
+            })
+        return entries
     
     
     @staticmethod
@@ -289,6 +330,7 @@ class ResultBankRec:
             "AI_MATCHES": [m for m in matches if m.get("match_type") in ("ai", "ai_queue")],
             "RESIDUAL_TIMING_MATCHES": [m for m in matches if m.get("match_type") == "residual_timing"],
             "RESIDUAL_SPLIT_MATCHES": [m for m in matches if m.get("match_type") == "residual_split"],
+            "SUGGESTED_JOURNAL_ENTRIES": ResultBankRec._build_suggested_journal_entries(matches),
             "UNRECONCILED_ITEMS": {
                 "ledger": unreconciled_gl_objs,
                 "bank": unreconciled_bank_objs,
@@ -620,3 +662,91 @@ class ResultBankRec:
             return payload
         
         return self.db_manager.run(_op)
+
+    @_log_db_errors("deleting reconciliation run")
+    def delete_run_for_user(
+        self,
+        user_id: str,
+        run_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not user_id:
+            return None
+
+        def _op(session: Session) -> Optional[Dict[str, Any]]:
+            run = session.query(ReconciliationRunModel).filter(
+                ReconciliationRunModel.user_id == user_id,
+                or_(
+                    ReconciliationRunModel.celery_task_id == str(run_id),
+                    ReconciliationRunModel.id == str(run_id),
+                ),
+            ).order_by(ReconciliationRunModel.run_at.desc()).first()
+            if run is None:
+                return None
+
+            if (run.status or "").lower() in {"processing", "started", "pending"}:
+                return {"deleted": False, "reason": "processing"}
+
+            public_id = ResultBankRec._public_run_id(run)
+            associated_files = [
+                path for path in (run.bank_csv_path, run.ledger_csv_path) if path
+            ]
+            storage_root = os.path.realpath(_default_storage_dir())
+            associated_files.extend([
+                os.path.join(storage_root, f"bank-recon-{public_id}.xlsx"),
+                os.path.join(storage_root, "reports", f"bank_rec_{public_id}.xlsx"),
+            ])
+
+            session.query(JournalEntryModel).filter(
+                JournalEntryModel.source_reconciliation_run_id == run.id
+            ).update(
+                {JournalEntryModel.source_reconciliation_run_id: None},
+                synchronize_session=False,
+            )
+            session.query(MatchResultModel).filter(
+                MatchResultModel.run_id == run.id
+            ).delete(synchronize_session=False)
+            session.query(BankStatementModel).filter(
+                BankStatementModel.run_id == run.id
+            ).delete(synchronize_session=False)
+            session.query(LedgerFormatModel).filter(
+                LedgerFormatModel.run_id == run.id
+            ).delete(synchronize_session=False)
+            session.delete(run)
+
+            other_run_paths = {
+                os.path.realpath(stored_path)
+                for paths in session.query(
+                    ReconciliationRunModel.bank_csv_path,
+                    ReconciliationRunModel.ledger_csv_path,
+                ).filter(ReconciliationRunModel.id != run.id).all()
+                for stored_path in paths if stored_path
+            }
+            files_to_remove = []
+            for path in associated_files:
+                resolved = os.path.realpath(path)
+                if (
+                    os.path.commonpath((storage_root, resolved)) == storage_root
+                    and resolved not in other_run_paths
+                ):
+                    files_to_remove.append(resolved)
+
+            return {
+                "deleted": True,
+                "files_to_remove": files_to_remove,
+            }
+
+        result = self.db_manager.run(_op)
+        if not result or not result.get("deleted"):
+            return result
+
+        cleanup_warnings = []
+        for path in result.pop("files_to_remove", []):
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except OSError:
+                logger.exception("Run data was deleted, but associated file cleanup failed: %s", path)
+                cleanup_warnings.append(os.path.basename(path))
+
+        result["cleanup_warnings"] = cleanup_warnings
+        return result

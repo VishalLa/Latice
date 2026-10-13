@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 
 from flask import Flask
 from flask_cors import CORS
@@ -21,6 +22,7 @@ def create_app() -> Flask:
     
     app.config["SECRET_KEY"] = config.SECRET_KEY
     app.config["JWT_SECRET_KEY"] = config.JWT_SECRET_KEY
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=12)
     JWTManager(app)
 
     configured_origins = os.environ.get("CORS_ALLOWED_ORIGINS")

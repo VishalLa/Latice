@@ -53,7 +53,7 @@ def _quality_summary(all_matches: list) -> dict:
     }
 
     return {
-        "average_confidence":        round(avg, 3),
+        "average_confidence":         round(avg, 3),
         "low_confidence_match_count": low_count,
         "low_confidence_match_pct":   low_pct,
         "by_adjustment_type":         by_adjustment_type,
@@ -76,14 +76,15 @@ def reconcile(
 
     if auto_detect_same_side:
         detection = detect_same_side(gl_records, bank_records)
-        if detection.confident and detection.same_side != same_side:
-            all_warnings.append(
-                f"same_side is set to {same_side}, but inspecting the first "
-                f"{detection.sample_size} records suggests the ledger/bank "
-                f"pair looks like same_side={detection.same_side} "
-                f"({detection.reason}). If matches look wrong, try passing "
-                f"same_side={detection.same_side} explicitly."
-            )
+        if detection.confident:
+            if detection.same_side != same_side:
+                all_warnings.append(
+                    f"Detected ledger/bank orientation differs from the "
+                    f"configured same_side={same_side}; using "
+                    f"same_side={detection.same_side} based on "
+                    f"{detection.reason}."
+                )
+            same_side = detection.same_side
 
     exact_match_result = exact_match(
         gl_records=gl_records,

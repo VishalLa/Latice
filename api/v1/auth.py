@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import smtplib
 from typing import Optional
 from functools import wraps
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import (
     get_jwt_identity,
     jwt_required,
     get_jwt
 )
 
-from service import UserService, _log_call
+from service import EmailService, UserService, _log_call
 
 app = Blueprint("auth", __name__)
 
@@ -72,12 +73,12 @@ def register_user():
         }), 400
 
     result = get_user_service().register(
-        password=   data["password"],
-        first_name= data["first_name"],
-        phone_no=   data["phone_no"],
-        email=      email,
-        last_name=  data.get("last_name"),
-        address=    data.get("address"),
+        password   = data["password"],
+        first_name = data["first_name"],
+        phone_no   = data["phone_no"],
+        email      = email,
+        last_name  = data.get("last_name"),
+        address    = data.get("address"),
     )
 
     if not result["ok"]:
@@ -103,7 +104,38 @@ def login_user():
         email=email, 
         password=password
     )
+    if result.get("email_verification_required"):
+        try:
+            EmailService().send_verification_email(email)
+        except (OSError, RuntimeError, ValueError, smtplib.SMTPException):
+            current_app.logger.exception("Could not send an email verification message")
+            return jsonify({
+                "ok": False,
+                "email_verification_required": True,
+                "error": "Could not send the verification email. Please try again later.",
+            }), 503
+
+        return jsonify({
+            "ok": False,
+            "email_verification_required": True,
+            "message": "Please verify your email before logging in. A verification link has been sent.",
+        }), 202
+
     return jsonify(result), 200 if result["ok"] else 401
+
+
+@app.route("/verify-email", methods=["GET"])
+@_log_call
+def verify_email():
+    token = request.args.get("token")
+    if not token:
+        return jsonify({
+            "ok": False,
+            "error": "Verification token is required",
+        }), 400
+
+    result = get_user_service().verify_email(token)
+    return jsonify(result), 200 if result["ok"] else 400
 
 
 @app.route("/logout", methods=["POST"])

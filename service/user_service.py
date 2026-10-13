@@ -11,7 +11,8 @@ from sqlalchemy.exc import IntegrityError
 from database import (
     DatabaseManager, 
     User, 
-    RevokedTokenModel
+    RevokedTokenModel,
+    verify_token,
 )
 
 from .helper import _log_db_errors
@@ -134,6 +135,12 @@ class UserService:
                     "error": "Invalid email or password"
                 }
                 
+            if not user.email_verified:
+                return {
+                    "ok": False,
+                    "email_verification_required": True,
+                }
+
             user.last_login = int(datetime.now(timezone.utc).timestamp())
             return {
                 "ok": True,
@@ -147,6 +154,31 @@ class UserService:
         result["access_token"] = create_access_token(identity=result["user"]["id"])
         result["role"] = result["user"]["role"]
         return result
+
+
+    @_log_db_errors("verifying user email")
+    def verify_email(self, token: str) -> Dict[str, Any]:
+        email = verify_token(token)
+        if not isinstance(email, str):
+            return {
+                "ok": False,
+                "error": "Invalid or expired verification link",
+            }
+
+        def _op(session: Session) -> Dict[str, Any]:
+            user = session.query(User).filter(
+                User.email == email
+            ).first()
+            if user is None:
+                return {
+                    "ok": False,
+                    "error": "Invalid or expired verification link",
+                }
+
+            user.email_verified = True
+            return {"ok": True}
+
+        return self.db_manager.run(_op)
     
     
     @_log_db_errors("logging out user")

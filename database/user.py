@@ -4,12 +4,12 @@ import enum
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import DateTime, String, Integer
+from sqlalchemy import DateTime, String, Integer, Boolean
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, _uuid
-from .security import hash_password, verify_password
+from ..core.security import hash_password, verify_password
 from .bank_rec_model import ReconciliationRunModel
 from .ledger_tax_models import BillModel, JournalEntryModel, TDSEntryModel, GSTR1RecordModel
 
@@ -34,6 +34,8 @@ class User(Base):
     last_name: Mapped[Optional[str]] = mapped_column(String(36))
     phone_no: Mapped[str] = mapped_column(String(15), nullable=False)
     address: Mapped[Optional[str]] = mapped_column(String(255))
+    
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     status: Mapped[UserStatus] = mapped_column(
         SAEnum(UserStatus, values_callable=lambda e: [m.value for m in e]),

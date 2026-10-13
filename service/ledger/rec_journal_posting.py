@@ -17,7 +17,7 @@ from database import (
     JournalLineModel
 )
 
-from .helper import _log_call, _log_db_errors, _safe_float
+from ..helper import _log_call, _log_db_errors, _safe_float
 
 
 class RecJournalPosting:

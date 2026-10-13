@@ -21,9 +21,9 @@ from schema import (
     LedgerFormat as SchemaLedger,
     BankStatement as SchemaBank
 )
-from ._base import Base
-from .reports.bank_recon_xlsx import write_bank_recon_xlsx
-from .helper import _log_db_errors
+from .._base import Base
+from ..reports.bank_recon_xlsx import write_bank_recon_xlsx
+from ..helper import _log_db_errors
 
 class ResultBankRec:
     

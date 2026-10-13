@@ -1,4 +1,5 @@
 import os
+import hashlib
 from passlib.context import CryptContext
 
 from itsdangerous import URLSafeTimedSerializer
@@ -9,11 +10,16 @@ pwd_context = CryptContext(
     deprecated="auto"
 )
 
+def _hash_per_bcrypt(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    safe_password = _hash_per_bcrypt(password)
+    return pwd_context.hash(safe_password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    safe_password = _hash_per_bcrypt(plain_password)
+    return pwd_context.verify(safe_password, hashed_password)
 
 
 def generate_verification_token(email: str) -> str: 

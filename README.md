@@ -63,6 +63,15 @@ REDIS_URL=redis://localhost:6379/0
 SECRET_KEY=replace-with-a-long-random-value
 JWT_SECRET_KEY=replace-with-a-different-long-random-value
 
+# Email verification (required when an unverified user attempts to log in)
+EMAIL_USER=your-smtp-account@example.com
+EMAIL_PASS=your-smtp-app-password
+EMAIL_OTP_SALT=replace-with-a-random-value
+# Optional SMTP and verification-link overrides
+EMAIL_SMTP_HOST=smtp.gmail.com
+EMAIL_SMTP_PORT=587
+EMAIL_VERIFICATION_URL=http://localhost:8000/auth/verify-email
+
 # Optional
 OLLAMA_URL=http://127.0.0.1:11434
 OLLAMA_NAME=phi3:latest
@@ -135,7 +144,7 @@ All routes other than registration and login require `Authorization: Bearer <tok
 
 | Area | Routes | Notes |
 | --- | --- | --- |
-| Authentication | `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `DELETE /auth/delete` | Registration requires `password`, `first_name`, `phone_no`, and `email`. |
+| Authentication | `POST /auth/register`, `POST /auth/login`, `GET /auth/verify-email?token=...`, `POST /auth/logout`, `GET /auth/me`, `DELETE /auth/delete` | An unverified user receives a verification link on login and cannot obtain a JWT until verified. Registration requires `password`, `first_name`, `phone_no`, and `email`. |
 | Reconciliation | `POST /api/bank-rec/reconciliation` | Multipart upload with `ledger_file` and `bank_file`; both must be CSV or XLSX. Returns a Celery task ID. |
 | Reconciliation status/results | `GET /api/bank-rec/reconciliation/<run_id>/status`, `GET /api/bank-rec/reconciliation/<run_id>` | Poll task state, then read persisted reconciliation results. |
 | Reconciliation follow-up | `POST /api/bank-rec/reconciliation/<run_id>/report`, `POST /api/bank-rec/reconciliation/<run_id>/journal-entries/approve` | Queue a run report or approve a non-empty `entries` list. |

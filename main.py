@@ -23,5 +23,12 @@ def initialize_database() -> None:
 if __name__ == '__main__':
     initialize_database()
     app = create_app()
+    
+    @app.route("/")
+    def health():
+        return {
+            "status": "running",
+        }, 200
+    
     app.run(host='0.0.0.0', port=8000, debug=True, use_reloader=False)  
 

@@ -47,17 +47,17 @@ def exact_match(
                 matched_amount = 0.0
 
                 if same_side:
-                    if gl_debit > 0 and _amounts_equal(gl_debit, bank.debit, amount_tol):
+                    if gl_debit > 0 and _amounts_equal(gl_debit, bank.debit_amount, amount_tol):
                         amount_ok = True 
                         matched_amount = gl_debit
-                    elif gl_credit > 0 and _amounts_equal(gl_credit, bank.credit, amount_tol):
+                    elif gl_credit > 0 and _amounts_equal(gl_credit, bank.credit_amount, amount_tol):
                         amount_ok = True
                         matched_amount = gl_credit
                 else: 
-                    if gl_debit > 0 and _amounts_equal(gl_debit, bank.credit, amount_tol):
+                    if gl_debit > 0 and _amounts_equal(gl_debit, bank.credit_amount, amount_tol):
                         amount_ok = True
                         matched_amount = gl_debit
-                    elif gl_credit > 0 and _amounts_equal(gl_credit, bank.debit, amount_tol):
+                    elif gl_credit > 0 and _amounts_equal(gl_credit, bank.debit_amount, amount_tol):
                         amount_ok = True
                         matched_amount = gl_credit
 

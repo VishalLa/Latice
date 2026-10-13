@@ -12,8 +12,8 @@ from database import (
     DatabaseManager, 
     User, 
     RevokedTokenModel,
-    verify_token,
 )
+from core.security import verify_token
 
 from .helper import _log_db_errors
 from ._base import Base

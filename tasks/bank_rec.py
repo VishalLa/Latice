@@ -79,5 +79,13 @@ def run_reconciliation_pipeline(
     except Exception as exc:
         max_retries = self.max_retries if self.max_retries is not None else 3
         if self.request.retries >= max_retries:
-            run_bank_rec._cleanup_input_files()
+            run_bank_rec.result_service.mark_run_status(
+                run_id=self.request.id,
+                status="failed",
+                error_message=str(exc),
+            )
+            run_bank_rec._cleanup_input_files(
+                ledger_path=ledger_path,
+                bank_path=bank_path,
+            )
         raise self.retry(exc=exc, countdown=10)

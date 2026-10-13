@@ -45,6 +45,7 @@ Optional local services: PaddleOCR processes uploaded bills; Ollama is used by t
 - Optional: Docker and Docker Compose for the containerised stack
 
 Dependencies are declared in `pyproject.toml`; `req.txt` is used by the Docker image.
+`bcrypt` is pinned to `4.0.1` for compatibility with the current `passlib` password-hashing backend.
 
 ## Configuration
 
@@ -73,6 +74,7 @@ EMAIL_SMTP_PORT=587
 EMAIL_VERIFICATION_URL=http://localhost:8000/auth/verify-email
 
 # Optional
+CORS_ALLOWED_ORIGINS=*
 OLLAMA_URL=http://127.0.0.1:11434
 OLLAMA_NAME=phi3:latest
 STORAGE_DIR=storage
@@ -80,6 +82,9 @@ POOL_WORKERS=1
 ```
 
 `DATABASE_URL` takes precedence when it is a PostgreSQL URL. A SQLite URL is accepted for local development, but PostgreSQL is the supported database. `STORAGE_DIR` is created automatically and holds uploaded files and generated reports. In containers, the default storage path is `/data/uploads` and the default Ollama host is `ollama`.
+`CORS_ALLOWED_ORIGINS` accepts `*` to allow any origin or a comma-separated list of origins, such as `http://localhost:5173,https://app.example.com`. If unset, cross-origin requests are not enabled.
+On startup, the backend adds the `email_verified` column to an older `user` table if needed. Existing accounts are marked verified so this schema upgrade does not lock them out.
+Ledger IDs are unique within a reconciliation run, rather than across the entire database. On startup, the backend migrates the older global `ledger_id` constraint for PostgreSQL and SQLite databases.
 
 For Docker Compose, use container hostnames in `.env`:
 
@@ -202,4 +207,4 @@ Tasks are configured to retry up to three times, except `tasks.full_run`, which 
 - `main.py` is a development entrypoint. Run the Flask app behind a production WSGI server for deployment.
 - Persist `STORAGE_DIR` in production; report downloads depend on the generated file still being available there.
 - Replace all example credentials and secrets. Do not expose PostgreSQL or Redis ports outside a trusted network.
-- Flask-CORS is installed but is not configured in the application factory. Configure CORS explicitly if a separately hosted browser client needs cross-origin access.
+- Set `CORS_ALLOWED_ORIGINS` to the browser app's origin(s) when it is hosted separately from the API. Use `*` only when intentionally allowing every origin.

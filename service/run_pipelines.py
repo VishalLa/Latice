@@ -17,13 +17,15 @@ from entry_point.data_extractor import classify_direction, detect_type, parse_in
 from entry_point.ocr import Block, get_ocr
 from schema import journal_entries_to_ledger_records
 
-from .bank_rec.store_bank_rec_data import PushBankRecData
-from .ledger.store_ledger_data import PushLedgerData
+from .bank_rec_service.store_bank_rec_data import PushBankRecData
+from .bank_rec_service.run_result_service_bank_rec import ResultBankRec
+
+from .ledger_service.store_ledger_data import PushLedgerData
+from .ledger_service.rebuild_service_ledger import RebuildServiceLedger
+
 from .reports.bank_recon_xlsx import write_bank_recon_xlsx
-from .helper import _safe_float, fy_label_for_date
+from .helper import _safe_float, fy_label_for_date, _log_call
 from ._base import Base
-from .helper import _log_call
-from .ledger.rebuild_service_ledger import RebuildServiceLedger
 
 class RunBankRec:
     
@@ -32,6 +34,7 @@ class RunBankRec:
         self.db_manager = base.get_manager
         self.config = base.config
         self.bank_rec_service = PushBankRecData(db_manager=self.db_manager)
+        self.result_service = ResultBankRec(db_manager=self.db_manager)
 
     
     @staticmethod
@@ -294,6 +297,15 @@ class RunBankRec:
             os.remove(bank_path)
         
         safe_result = self._deep_serialize(result)
+        if db_run_id is not None:
+            updated = self.result_service.mark_run_status(
+                run_id=run_id,
+                status="success",
+            )
+            if not updated:
+                raise RuntimeError(
+                    f"Could not mark reconciliation run {run_id} as successful"
+                )
         
         return {
             "status": "success",

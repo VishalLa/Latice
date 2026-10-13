@@ -1,7 +1,10 @@
+import os
+
 from flask import Flask
+from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 
-from Backend.api.v1 import (
+from api.v1 import (
     auth_app,
     bank_rec_app,
     ledger_app,
@@ -19,6 +22,19 @@ def create_app() -> Flask:
     app.config["SECRET_KEY"] = config.SECRET_KEY
     app.config["JWT_SECRET_KEY"] = config.JWT_SECRET_KEY
     JWTManager(app)
+
+    configured_origins = os.environ.get("CORS_ALLOWED_ORIGINS")
+    if configured_origins is not None:
+        allowed_origins = [
+            origin.strip()
+            for origin in configured_origins.split(",")
+            if origin.strip()
+        ]
+        
+        if not allowed_origins:
+            raise ValueError("CORS_ALLOWED_ORIGINS must contain '*' or at least one origin")
+        
+        CORS(app, origins=allowed_origins)
 
     # v1 apis
     app.register_blueprint(auth_app,     url_prefix="/auth")

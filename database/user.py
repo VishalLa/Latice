@@ -8,8 +8,9 @@ from sqlalchemy import DateTime, String, Integer, Boolean
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from core.security import hash_password, verify_password
+
 from .base import Base, _uuid
-from ..core.security import hash_password, verify_password
 from .bank_rec_model import ReconciliationRunModel
 from .ledger_tax_models import BillModel, JournalEntryModel, TDSEntryModel, GSTR1RecordModel
 

@@ -28,7 +28,11 @@ class LedgerSource(str, enum.Enum):
 class LedgerFormatModel(Base):
     __tablename__ = "ledger_format"
     __table_args__ = (
-        UniqueConstraint("ledger_id", name="uq_ledger_format_ledger_id"),
+        UniqueConstraint(
+            "run_id",
+            "ledger_id",
+            name="uq_ledger_format_run_ledger_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

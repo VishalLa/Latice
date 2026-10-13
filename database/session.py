@@ -270,9 +270,145 @@ class DatabaseManager:
                 columns = {column["name"] for column in inspector.get_columns("sessions")}
                 if "id" not in columns:
                     self._migrate_legacy_sessions_table()
+            self._migrate_ledger_format_run_uniqueness()
             Base.metadata.create_all(engine)
 
         self.execute_raw(_init)
+
+    def _migrate_ledger_format_run_uniqueness(self) -> None:
+        """Scope ledger ID uniqueness to a reconciliation run."""
+        inspector = inspect(self.engine)
+        if not inspector.has_table("ledger_format"):
+            return
+
+        unique_constraints = inspector.get_unique_constraints("ledger_format")
+        old_constraints = [
+            constraint
+            for constraint in unique_constraints
+            if constraint.get("column_names") == ["ledger_id"]
+        ]
+        has_run_scoped_constraint = any(
+            set(constraint.get("column_names") or ()) == {"run_id", "ledger_id"}
+            for constraint in unique_constraints
+        )
+        if not old_constraints and has_run_scoped_constraint:
+            return
+        if self.engine.dialect.name == "sqlite":
+            self._migrate_sqlite_ledger_format_uniqueness(
+                has_old_constraint=bool(old_constraints),
+            )
+            return
+        if self.engine.dialect.name != "postgresql":
+            raise RuntimeError(
+                "The ledger_format uniqueness migration supports PostgreSQL "
+                "and SQLite."
+            )
+
+        unnamed_constraints = [
+            constraint for constraint in old_constraints if not constraint.get("name")
+        ]
+        if unnamed_constraints:
+            raise RuntimeError(
+                "Cannot migrate an unnamed global ledger_format.ledger_id "
+                "constraint automatically."
+            )
+
+        quote = self.engine.dialect.identifier_preparer.quote
+        with self.engine.begin() as connection:
+            for constraint in old_constraints:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {quote('ledger_format')} "
+                        f"DROP CONSTRAINT {quote(constraint['name'])}"
+                    )
+                )
+
+            if not has_run_scoped_constraint:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {quote('ledger_format')} "
+                        f"ADD CONSTRAINT {quote('uq_ledger_format_run_ledger_id')} "
+                        f"UNIQUE ({quote('run_id')}, {quote('ledger_id')})"
+                    )
+                )
+
+    def _migrate_sqlite_ledger_format_uniqueness(
+        self,
+        has_old_constraint: bool,
+    ) -> None:
+        """Update SQLite's ledger table, whose constraints cannot be altered in place."""
+        quote = self.engine.dialect.identifier_preparer.quote
+        if not has_old_constraint:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"CREATE UNIQUE INDEX IF NOT EXISTS "
+                        f"{quote('uq_ledger_format_run_ledger_id')} "
+                        f"ON {quote('ledger_format')} "
+                        f"({quote('run_id')}, {quote('ledger_id')})"
+                    )
+                )
+            return
+
+        inspector = inspect(self.engine)
+        old_columns = {
+            column["name"] for column in inspector.get_columns("ledger_format")
+        }
+        model_table = Base.metadata.tables["ledger_format"]
+        if old_columns != set(model_table.columns.keys()):
+            raise RuntimeError(
+                "Cannot migrate SQLite ledger_format because its columns differ "
+                "from the current model."
+            )
+
+        with self.engine.connect() as index_connection:
+            old_index_sql = index_connection.execute(
+                text(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type = 'index' AND tbl_name = 'ledger_format' "
+                    "AND sql IS NOT NULL"
+                )
+            ).scalars().all()
+
+        temporary_name = f"ledger_format_migration_{uuid.uuid4().hex[:12]}"
+        migration_metadata = MetaData()
+        for table in Base.metadata.sorted_tables:
+            table.to_metadata(
+                migration_metadata,
+                name=temporary_name if table.name == "ledger_format" else None,
+            )
+        migration_table = migration_metadata.tables[temporary_name]
+        connection = self.engine.connect()
+        try:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.commit()
+            with connection.begin():
+                migration_table.create(connection)
+                columns = ", ".join(quote(name) for name in model_table.columns.keys())
+                connection.execute(
+                    text(
+                        f"INSERT INTO {quote(temporary_name)} ({columns}) "
+                        f"SELECT {columns} FROM {quote('ledger_format')}"
+                    )
+                )
+                connection.execute(text(f"DROP TABLE {quote('ledger_format')}"))
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {quote(temporary_name)} "
+                        f"RENAME TO {quote('ledger_format')}"
+                    )
+                )
+                for sql in old_index_sql:
+                    connection.execute(text(sql))
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.commit()
+            raise
+        finally:
+            connection.close()
 
 
     def _migrate_legacy_sessions_table(self) -> None:

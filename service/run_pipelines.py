@@ -154,6 +154,7 @@ class RunBankRec:
         run_id: str,
         ledger_path: Optional[str],
         bank_path: str,
+        run_name: Optional[str] = None,
         date_format: str = "%d-%m-%Y",
         ledger_data: Optional[Dict[str, Any]] = None,
         user_id: Optional[str] = None,
@@ -187,6 +188,7 @@ class RunBankRec:
         try:
             run_row = self.bank_rec_service.create_run(
                 celery_task_id=run_id,
+                run_name=run_name,
                 user_id=user_id,
                 bank_name=bank_data.get("bank_name"),
                 template_version=bank_data.get("template_version"),

@@ -47,6 +47,7 @@ def _allowed(filename: str) -> bool:
 def start_reconciliation():
     ledger_file = request.files.get("ledger_file")
     bank_file = request.files.get("bank_file")
+    run_name = (request.form.get("run_name") or "").strip() or None
     
     if not ledger_file or not bank_file or not ledger_file.filename or not bank_file.filename:
         return jsonify({
@@ -75,11 +76,14 @@ def start_reconciliation():
     ledger_file.save(ledger_path)
     bank_file.save(bank_path)
 
-    task = run_reconciliation_pipeline.apply_async(args=[ledger_path, bank_path])
+    task = run_reconciliation_pipeline.apply_async(
+        args=[ledger_path, bank_path, run_name, str(get_jwt_identity())]
+    )
     return jsonify({
         "ok": True,
         "run_id": task.id,
         "task_id": task.id,
+        "run_name": run_name,
         "status_url": f"/api/bank-rec/reconciliation/{task.id}/status",
     }), 202
 
@@ -158,3 +162,74 @@ def approve_journal_entries(run_id: str):
         run_id=run.id,
     )), 200
 
+
+@app.route("/previous/runs/<user_id>", methods=["GET"])
+@jwt_required()
+@_log_call
+def get_previous_runs(user_id: str):
+    authenticated_user_id = str(get_jwt_identity())
+    if user_id != authenticated_user_id:
+        return jsonify({
+            "ok": False,
+            "error": "Not authorized to access these runs",
+        }), 403
+
+    try:
+        limit = int(request.args.get("limit", "50"))
+        offset = int(request.args.get("offset", "0"))
+    except ValueError:
+        return jsonify({
+            "ok": False,
+            "error": "limit and offset must be integers",
+        }), 400
+
+    if not 1 <= limit <= 200 or offset < 0:
+        return jsonify({
+            "ok": False,
+            "error": "limit must be between 1 and 200 and offset must be non-negative",
+        }), 400
+
+    _, result_service, _ = _services()
+    runs = result_service.list_runs_for_user(
+        user_id=authenticated_user_id,
+        limit=limit,
+        offset=offset,
+    )
+    return jsonify({
+        "runs": runs,
+        "limit": limit,
+        "offset": offset,
+    }), 200
+
+
+@app.route("/previous/runs/<user_id>/<run_id>", methods=["GET"])
+@jwt_required()
+@_log_call
+def get_previous_run(user_id: str, run_id: str):
+    authenticated_user_id = str(get_jwt_identity())
+    if user_id != authenticated_user_id:
+        return jsonify({
+            "ok": False,
+            "error": "Not authorized to access this run",
+        }), 403
+
+    include_records_raw = request.args.get("include_records", "true").lower()
+    if include_records_raw not in {"true", "false"}:
+        return jsonify({
+            "ok": False,
+            "error": "include_records must be true or false",
+        }), 400
+
+    _, result_service, _ = _services()
+    run = result_service.get_run_for_user(
+        user_id=authenticated_user_id,
+        run_id=run_id,
+        include_records=include_records_raw == "true",
+    )
+    if run is None:
+        return jsonify({
+            "ok": False,
+            "error": "Run not found",
+        }), 404
+
+    return jsonify(run), 200

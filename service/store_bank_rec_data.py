@@ -74,11 +74,13 @@ class PushBankRecData:
         ledger_source: Optional[str] = None,
         bank_csv_path: Optional[str] = None,
         ledger_csv_path: Optional[str] = None,
+        run_name: Optional[str] = None,
     ) -> ReconciliationRunModel: 
         
         def _op(session: Session) -> ReconciliationRunModel:
             run = ReconciliationRunModel(
                 celery_task_id=celery_task_id,
+                name=run_name,
                 user_id=user_id,
                 bank_name=bank_name,
                 template_version=template_version,

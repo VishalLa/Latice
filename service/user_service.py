@@ -8,16 +8,22 @@ from flask_jwt_extended import create_access_token
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from database import DatabaseManager, User, RevokedTokenModel
+from database import (
+    DatabaseManager, 
+    User, 
+    RevokedTokenModel
+)
 
 from .helper import _log_db_errors
 from ._base import Base
+# from .run_result_service_bank_rec import ResultBankRec
 
 
 class UserService:
     def __init__(self, db_manager: Optional[DatabaseManager] = None) -> None:
         base = Base(db_manager)
         self.db_manager = base.get_manager
+        # self._result = ResultBankRec(db_manager=self.db_manager)
 
 
     @staticmethod
@@ -209,3 +215,30 @@ class UserService:
         
         return self.db_manager.run(_op)
         
+        
+    # def get_previous_runs(
+    #     self,
+    #     user_id: str,
+    #     limit: int = 50,
+    #     offset: int = 0,
+    # ) -> List[Dict[str, Any]]:
+        
+    #     return self._result.list_runs_for_user(
+    #         user_id=user_id,
+    #         limit=limit,
+    #         offset=offset
+    #     )
+        
+        
+    # @_log_db_errors("previous run result and bank, ledger")
+    # def get_previous_run_data(
+    #     self,
+    #     user_id: str,
+    #     run_id: str,
+    #     include_records: bool = True,
+    # ) -> Dict[str, Any]:
+    #     return self._result.get_run_for_user(
+    #         user_id=user_id,
+    #         run_id=run_id,
+    #         include_records=include_records,
+    #     )

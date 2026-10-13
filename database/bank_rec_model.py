@@ -19,7 +19,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from .base import Base
+from .base import Base, _uuid
 
 class LedgerSource(str, enum.Enum):
     AUTO = "auto"      
@@ -132,7 +132,8 @@ class ReconciliationRunModel(Base):
 
     __tablename__ = "reconciliation_run"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[Optional[str]] = mapped_column(Text, default=f"{id}")
     celery_task_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True)
     template_id: Mapped[Optional[int]] = mapped_column(Integer)
 

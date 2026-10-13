@@ -62,7 +62,9 @@ def process_post_data(
 def run_reconciliation_pipeline(
     self,
     ledger_path: str,
-    bank_path: str
+    bank_path: str,
+    run_name: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     run_bank_rec = get_run_bank_rec()
     
@@ -70,11 +72,12 @@ def run_reconciliation_pipeline(
         return run_bank_rec.run_reconciliation_pipeline(
             run_id=self.request.id,
             ledger_path=ledger_path,
-            bank_path=bank_path
+            bank_path=bank_path,
+            run_name=run_name,
+            user_id=user_id,
         )
     except Exception as exc:
         max_retries = self.max_retries if self.max_retries is not None else 3
         if self.request.retries >= max_retries:
             run_bank_rec._cleanup_input_files()
         raise self.retry(exc=exc, countdown=10)
-

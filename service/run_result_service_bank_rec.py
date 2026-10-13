@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import os
 import re
+import dataclasses
+
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy.orm import Session
+from sqlalchemy import or_
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from database import (
     DatabaseManager,
     
     ReconciliationRunModel,
     LedgerFormatModel,
-    BankStatementModel
+    BankStatementModel,
+    MatchResultModel
 )
 from schema import (
     LedgerFormat as SchemaLedger,
@@ -231,30 +235,13 @@ class ResultBankRec:
     
     
     @staticmethod
-    @_log_db_errors("fetching internal run bundle")
-    def _fetch_run_bundle_internal(
-        session: Session, 
-        run_id: str, 
-        user_id: Optional[str] = None
-    ) -> Optional[Tuple[Dict[str, Any], List[SchemaLedger], List[SchemaBank]]]:
-        
-        run = ResultBankRec._find_run_internal(
-            session=session, 
-            run_id=run_id, 
-            user_id=user_id
-        )
-        if run is None:
-            return None
-
+    def _build_run_bundle(
+        session: Session,
+        run: ReconciliationRunModel
+    ) -> Tuple[Dict[str, Any], List[SchemaLedger], List[SchemaBank]]:
         matches = ResultBankRec._build_matches(run=run)
-        gl_objs = ResultBankRec._build_ledger_objs(
-            session=session, 
-            run=run
-        )
-        bank_objs = ResultBankRec._build_bank_objs(
-            session=session, 
-            run=run
-        )
+        gl_objs = ResultBankRec._build_ledger_objs(session=session, run=run)
+        bank_objs = ResultBankRec._build_bank_objs(session=session, run=run)
         
         matched_ledger_ids = set()
         matched_bank_ids = set()
@@ -266,18 +253,18 @@ class ResultBankRec:
             matched_bank_ids.update(
                 ResultBankRec._split_match_ids(raw=match.get("bank_id"))
             )
-
+            
         unreconciled_gl_objs = [
-            item 
-            for item in gl_objs 
+            item
+            for item in gl_objs
             if str(item.ledger_id) not in matched_ledger_ids
         ]
         unreconciled_bank_objs = [
-            item 
-            for item in bank_objs 
+            item
+            for item in bank_objs
             if str(item.row_index) not in matched_bank_ids
         ]
-
+        
         recon_result: Dict[str, Any] = {
             "summary": {
                 "run_id": run.celery_task_id or str(run.id),
@@ -307,8 +294,28 @@ class ResultBankRec:
                 "bank": unreconciled_bank_objs,
             },
         }
+        
         return recon_result, gl_objs, bank_objs
     
+    
+    @staticmethod
+    @_log_db_errors("fetching internal run bundle")
+    def _fetch_run_bundle_internal(
+        session: Session, 
+        run_id: str, 
+        user_id: Optional[str] = None
+    ) -> Optional[Tuple[Dict[str, Any], List[SchemaLedger], List[SchemaBank]]]:
+        
+        run = ResultBankRec._find_run_internal(
+            session=session,
+            run_id=run_id,
+            user_id=user_id
+        )
+        if run is None:
+            return None
+
+        return ResultBankRec._build_run_bundle(session=session, run=run)
+
     
     @_log_db_errors("finding run")
     def find_run(
@@ -471,3 +478,145 @@ class ResultBankRec:
             
         return self.db_manager.run(_op)
     
+    
+    # per-user run history
+    @staticmethod
+    def _public_run_id(run: ReconciliationRunModel) -> str:
+        return run.celery_task_id or str(run.id)
+    
+    
+    @staticmethod
+    def _state_from_status(status: Optional[str]) -> str:
+        s = (status or "processing").lower()
+        return {
+            "success": "SUCCESS",
+            "failed": "FAILURE"
+        }.get(s, "STARTED")
+        
+    
+    @staticmethod
+    def _to_plain(obj: Any) -> Any:
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            return dataclasses.asdict(obj)
+        if hasattr(obj, "to_dict") and callable(obj.to_dict):
+            return obj.to_dict()
+        if isinstance(obj, dict):
+            return {k: ResultBankRec._to_plain(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple, set)):
+            return [ResultBankRec._to_plain(v) for v in obj]
+        return obj
+
+    
+    @staticmethod
+    def _find_owned_run_internal(
+        session: Session,
+        user_id: str,
+        run_id: str
+    ) -> Optional[ReconciliationRunModel]:
+        return (
+            session.query(ReconciliationRunModel).options(
+                selectinload(ReconciliationRunModel.match_results).options(
+                    joinedload(MatchResultModel.ledger_format),
+                    joinedload(MatchResultModel.bank_statement)
+                )
+            ).filter(
+                ReconciliationRunModel.user_id == user_id,
+                or_(
+                    ReconciliationRunModel.celery_task_id == str(run_id),
+                    ReconciliationRunModel.id == str(run_id)
+                )
+            ).order_by(ReconciliationRunModel.run_at.desc()).first()
+        )
+        
+    
+    @staticmethod
+    def _run_list_item(run: ReconciliationRunModel) -> Dict[str, Any]:
+        public_id = ResultBankRec._public_run_id(run)
+        return {
+            "run_id": public_id,
+            "name": run.name or f"Run {public_id[:8]}",
+            "state": ResultBankRec._state_from_status(run.status),
+            "status": run.status,
+            "error_message": run.error_message,
+            "bank_name": run.bank_name,
+            "run_at": run.run_at.isoformat() if run.run_at else None,
+            "ledger_records": run.ledger_records,
+            "bank_records": run.bank_records,
+            "exact_matches": run.exact_matches,
+            "fuzzy_matches": run.fuzzy_matches,
+            "ai_matches": run.ai_matches,
+            "unreconciled_ledger": run.unreconciled_ledger,
+            "unreconciled_bank": run.unreconciled_bank,
+        }
+        
+        
+    @_log_db_errors("listing runs for user")
+    def list_runs_for_user(
+        self,
+        user_id: str,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        if not user_id:
+            return []
+        
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+
+        def _op(session: Session) -> List[Dict[str, Any]]:
+            runs = session.query(ReconciliationRunModel).filter(
+                ReconciliationRunModel.user_id == user_id
+            ).order_by(
+                ReconciliationRunModel.run_at.desc(),
+                ReconciliationRunModel.id
+            ).limit(limit).offset(offset).all()
+            return [ResultBankRec._run_list_item(run) for run in runs]
+    
+        return self.db_manager.run(_op)
+    
+    
+    @_log_db_errors("getting run for user")
+    def get_run_for_user(
+        self,
+        user_id: str,
+        run_id: str,
+        include_records: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        if not user_id:
+            return None
+        
+        def _op(session: Session) -> Optional[Dict[str, Any]]:
+            run = ResultBankRec._find_owned_run_internal(
+                session=session,
+                user_id=user_id,
+                run_id=run_id
+            )
+            if run is None:
+                return None
+            
+            recon_result, gl_objs, bank_objs = ResultBankRec._build_run_bundle(
+                session=session,
+                run=run,
+            )
+            public_id = ResultBankRec._public_run_id(run)
+            state = ResultBankRec._state_from_status(run.status)
+            payload: Dict[str, Any] = {
+                "run_id": public_id,
+                "name": run.name or f"Run {public_id[:8]}",
+                "state": state,
+                "status": run.status,
+                "error_message": run.error_message,
+                "summary": recon_result["summary"],
+                "reconciliation_data": ResultBankRec._to_plain(recon_result),
+                "download_url": (
+                    f"/download_report/run/{public_id}" if state == "SUCCESS" else None
+                ),
+            }
+        
+            if include_records:
+                payload["ledger_records"] = ResultBankRec._to_plain(gl_objs)
+                payload["bank_records"] = ResultBankRec._to_plain(bank_objs)
+                
+            return payload
+        
+        return self.db_manager.run(_op)

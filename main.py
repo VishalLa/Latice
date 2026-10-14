@@ -1,34 +1,19 @@
+import os
+
 from app import create_app
 from core.config import Config
-from database import DatabaseManager
+from manage_db import initialize_database
 
 
-def initialize_database() -> None:
-    """Create the SQLAlchemy schema before the HTTP server accepts requests."""
+if __name__ == "__main__":
     config = Config.from_env()
-    database_url = config.SQLALCHEMY_SYNC_DATABASE_URI or config.DATABASE_URL
-    if not database_url:
-        raise RuntimeError("DATABASE_URL is required to initialize the database")
 
-    database = DatabaseManager(
-        db_url=database_url,
-        echo=config.DEBUG,
-        pool_workers=1,
-    )
-    try:
-        database.init_db()
-    finally:
-        database.dispose()
-
-if __name__ == '__main__':
     initialize_database()
     app = create_app()
-    
-    @app.route("/")
-    def health():
-        return {
-            "status": "running",
-        }, 200
-    
-    app.run(host='0.0.0.0', port=8000, debug=True, use_reloader=False)  
 
+    app.run(
+        host=os.environ.get("HOST", "127.0.0.1"),
+        port=int(os.environ.get("PORT", "8000")),
+        debug=config.DEBUG,   # set DEBUG=true in your local .env to enable
+        use_reloader=False,
+    )

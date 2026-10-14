@@ -1,93 +1,131 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app: &app
+  build: .
+  image: latice-backend:${TAG:-latest}
+  env_file: .env
+  restart: unless-stopped
+  networks: [backend_network]
+  logging: *default-logging
+
 services:
   postgres_db:
     image: postgres:15-alpine
-    container_name: lattic_postgres
-    restart: always
-    env_file:
-      - .env
+    restart: unless-stopped
+    env_file: .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
-      interval: 3s
+      interval: 5s
       timeout: 3s
-      retries: 5
-    networks:
-      - backend_network
-  
-  redis_server:
-     image: redis:7-alpine
-     container_name: lattic_redis
-     restart: always
-     networks:
-       - backend_network
-     healthcheck:
-       test: ["CMD", "redis-cli", "ping"]
-       interval: 3s
-       timeout: 3s
-       retries: 5
-  
-  backend:
-    build: .
-    container_name: lattic_backend
-    ports:
-      - "8000:8000"
-    volumes:
-      - .:/app
-      - bill_uploads:/data/uploads
-    env_file:
-      - .env
-    depends_on:
-      postgres_db:
-        condition: service_healthy
-      redis_server:
-        condition: service_healthy
-      ollama:
-        condition: service_started
-    networks:
-      - backend_network
+      retries: 10
+    networks: [backend_network]
+    logging: *default-logging
 
-  worker:
-    build: .
-    container_name: lattic_worker
-    command: celery -A app.celery worker --loglevel=info
+  redis_server:
+    image: redis:7-alpine
+    restart: unless-stopped
+    env_file: .env
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
     volumes:
-      - .:/app
-      - bill_uploads:/data/uploads
-    env_file: 
-      - .env
-    depends_on:
-      postgres_db:
-        condition: service_healthy
-      redis_server:
-        condition: service_healthy
-      ollama:
-        condition: service_started
-    networks:
-      - backend_network
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend_network]
+    logging: *default-logging
 
   ollama:
     image: ollama/ollama:latest
-    container_name: ollama_service
-    ports:
-      - "11434:11434"
+    restart: unless-stopped
     environment:
-      - OLLAMA_ORIGINS=*
-      - OLLAMA_HOST=0.0.0.0
+      OLLAMA_HOST: 0.0.0.0
     volumes:
       - ollama_storage:/root/.ollama
-    restart: always
-    networks:
-      - backend_network
+    networks: [backend_network]
+    logging: *default-logging
+    
+  migrate:
+    <<: *app
+    command: ["python", "manage_db.py"]
+    restart: "no"
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+
+  backend:
+    <<: *app
+    expose:
+      - "8000"
+    volumes:
+      - bill_uploads:/data/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis_server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    <<: *app
+    command: >
+      celery -A app.celery worker
+      --loglevel=info
+      --concurrency=${CELERY_CONCURRENCY:-2}
+      --max-tasks-per-child=50
+    volumes:
+      - bill_uploads:/data/uploads
+      - ocr_models:/home/appuser/.paddleocr
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis_server:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    stop_grace_period: 120s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [backend_network]
+    logging: *default-logging
 
 volumes:
   postgres_data:
+  redis_data:
   ollama_storage:
-  shared_uploads:
   bill_uploads:
+  ocr_models:
+  caddy_data:
+  caddy_config:
 
 networks:
   backend_network:
     driver: bridge
     name: backend_network
-    
+

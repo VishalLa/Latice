@@ -1,23 +1,26 @@
 FROM python:3.11-slim
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        gcc \
-        libpq-dev \
-        libgl1 \
-        libglib2.0-0 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    STORAGE_DIR=/data/uploads
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 libglib2.0-0 libgomp1 curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+WORKDIR /app
 
 COPY req.txt .
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r req.txt 
+RUN pip install -r req.txt && pip install "gunicorn>=22"
 
 COPY . .
-RUN chmod +x start.sh
-CMD ["bash", "./start.sh"]
+
+RUN useradd --create-home --uid 1000 appuser \
+    && mkdir -p /data/uploads /home/appuser/.paddleocr \
+    && chown -R appuser:appuser /app /data /home/appuser
+
+USER appuser
+EXPOSE 8000
+
+CMD ["gunicorn", "wsgi:app", "-c", "gunicorn.conf.py"]

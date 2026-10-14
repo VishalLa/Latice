@@ -51,7 +51,6 @@ services:
       - ollama_storage:/root/.ollama
     networks: [backend_network]
     logging: *default-logging
-    
   migrate:
     <<: *app
     command: ["python", "manage_db.py"]
@@ -60,19 +59,32 @@ services:
       postgres_db:
         condition: service_healthy
 
+  init_uploads:
+    <<: *app
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - mkdir -p /data/uploads && chown 1000:1000 /data/uploads && chmod u+rwx /data/uploads
+    restart: "no"
+    volumes:
+      - bill_uploads:/data/uploads
+
   backend:
     <<: *app
-    expose:
-      - "8000"
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
       - bill_uploads:/data/uploads
     depends_on:
       migrate:
         condition: service_completed_successfully
+      init_uploads:
+        condition: service_completed_successfully
       redis_server:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      # test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -86,10 +98,12 @@ services:
       --concurrency=${CELERY_CONCURRENCY:-2}
       --max-tasks-per-child=50
     volumes:
-      - bill_uploads:/data/uploads
+      - bill_uploads:/data/uploads      # must be the SAME volume as backend
       - ocr_models:/home/appuser/.paddleocr
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      init_uploads:
         condition: service_completed_successfully
       redis_server:
         condition: service_healthy
@@ -97,35 +111,14 @@ services:
         condition: service_started
     stop_grace_period: 120s
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      backend:
-        condition: service_healthy
-    networks: [backend_network]
-    logging: *default-logging
-
 volumes:
   postgres_data:
   redis_data:
   ollama_storage:
   bill_uploads:
   ocr_models:
-  caddy_data:
-  caddy_config:
 
 networks:
   backend_network:
     driver: bridge
     name: backend_network
-

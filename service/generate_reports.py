@@ -188,7 +188,7 @@ class GenerateReports:
         )
         if owner_id is not None:
             query = query.filter(JournalEntryModel.user_id == owner_id)
-        models = query.order_by(JournalEntryModel.date.asc()).all
+        models = query.order_by(JournalEntryModel.date.asc()).all()
         
         entries = self.rebuild_service.rebuild_journal_entries(models=models)
         gl, _, _ = build_ledger([], _prebuilt_entries=entries)

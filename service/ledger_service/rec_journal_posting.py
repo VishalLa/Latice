@@ -73,9 +73,9 @@ class RecJournalPosting:
                 
                 dr_account = str(entry.get("debit_account", "")).strip()
                 cr_account = str(entry.get("credit_account", "")).strip()
-                amount =     _safe_float(entry.get("amount"))
-                narration =  str(entry.get("entry_narrative") or entry.get("narration") or "").strip()
-                bank_id =    entry.get("bank_id")
+                amount     = _safe_float(entry.get("amount"))
+                narration  = str(entry.get("entry_narrative") or entry.get("narration") or "").strip()
+                bank_id    = entry.get("bank_id")
                 entry_date = entry.get("date")
                 
                 if not dr_account or not cr_account or not amount:

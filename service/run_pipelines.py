@@ -442,7 +442,6 @@ class RunBill:
                 tds_engine = TDSEngine(financial_year=fy_label_for_date(journal_entry.date))
 
                 self.ledger_service.prime_tds_engine_aggregates(
-                    session=session,
                     user_id=bill.user_id,
                     deductee_name=bill_dict.get("vendor_name") or bill_dict.get("buyer_name") or "Unknown Vendor",
                     financial_year=tds_engine.financial_year,
@@ -455,14 +454,12 @@ class RunBill:
                 )
                 
                 self.ledger_service.persist_tds_engine_aggregates(
-                    session=session,
                     user_id=bill.user_id,
                     financial_year=tds_engine.financial_year,
                     tds_engine=tds_engine,
                 )
 
                 journal_model = self.ledger_service.push_journal_entry(
-                    session=session,
                     user_id=bill.user_id,
                     journal_entry=tds_result.journal_entry,
                     bill=bill
@@ -473,7 +470,6 @@ class RunBill:
                 tds_model = None
                 if tds_result.tds_applied and tds_result.tds_entry is not None:
                     tds_model = self.ledger_service.push_tds_entry(
-                        session=session,
                         user_id=bill.user_id,
                         tds_entry=tds_result.tds_entry,
                         journal_entry_model=journal_model,
@@ -534,7 +530,6 @@ class RunBill:
             gstr1 = GSTR1Builder(bill_dicts).build(period_label=period_label)
 
             ok = self.ledger_service.replace_gstr1_period(
-                session=session,
                 user_id=user_id,
                 period_label=period_label,
                 gstr1=gstr1

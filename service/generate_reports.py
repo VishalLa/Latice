@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Optional, List, Tuple, Dict, Any
 from werkzeug.utils import secure_filename
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ledger import GeneralLedger, build_ledger
 from schema import (
@@ -142,6 +142,7 @@ class GenerateReports:
             JournalEntryModel.date >= date_from,
             JournalEntryModel.date <= date_to
         )
+        query = query.options(joinedload(JournalEntryModel.lines))
         
         if owner_id is not None:
             query = query.filter(JournalEntryModel.user_id == owner_id)

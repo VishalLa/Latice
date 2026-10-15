@@ -107,6 +107,24 @@ def upload_bill():
     }), 202
     
 
+@app.route("/bills", methods=["GET"])
+@jwt_required()
+@_log_call
+def list_bills():
+    direction = request.args.get("direction")
+    if direction and direction not in {"input", "output"}:
+        return jsonify({
+            "ok": False,
+            "error": "direction must be input or output",
+        }), 400
+
+    return jsonify(_get_run_bill().list_bills(
+        user_id=get_jwt_identity(),
+        status=request.args.get("status"),
+        direction=direction,
+    )), 200
+
+
 @app.route("/bills/<bill_id>/status", methods=["GET"])
 @jwt_required()
 @_log_call

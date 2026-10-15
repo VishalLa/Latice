@@ -11,6 +11,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from api.v1 import (
     auth_app,
     bank_rec_app,
+    bills_app,
     ledger_app,
     pipeline_app,
     report_app,
@@ -114,6 +115,7 @@ def create_app() -> Flask:
     app.register_blueprint(auth_app,     url_prefix="/auth")
     app.register_blueprint(pipeline_app, url_prefix="/api/pipeline")
     app.register_blueprint(bank_rec_app, url_prefix="/api/bank-rec")
+    app.register_blueprint(bills_app,     url_prefix="/api/bills")
     app.register_blueprint(ledger_app,   url_prefix="/api/ledger")
     app.register_blueprint(report_app,   url_prefix="/api")
 

@@ -391,6 +391,42 @@ class RunBill:
             return bill.id
 
         return self.db_manager.run(_op)
+
+
+    @_log_call
+    def list_bills(
+        self,
+        user_id: str,
+        status: Optional[str] = None,
+        direction: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List a user's bills, optionally filtered by processing status or direction."""
+        def _op(session: Session) -> Dict[str, Any]:
+            query = session.query(BillModel).filter(BillModel.user_id == user_id)
+            if status:
+                query = query.filter(BillModel.status == status)
+            if direction:
+                query = query.filter(BillModel.direction == direction)
+
+            bills = query.order_by(BillModel.created_at.desc()).limit(200).all()
+            return {
+                "count": len(bills),
+                "bills": [
+                    {
+                        "id": bill.id,
+                        "vendor_name": bill.vendor_name,
+                        "invoice_number": bill.invoice_number,
+                        "direction": bill.direction,
+                        "bill_date": bill.bill_date.isoformat() if bill.bill_date else None,
+                        "status": bill.status,
+                        "error_message": bill.error_message,
+                        "created_at": bill.created_at.isoformat() if bill.created_at else None,
+                    }
+                    for bill in bills
+                ],
+            }
+
+        return self.db_manager.run(_op)
     
     
     @_log_call

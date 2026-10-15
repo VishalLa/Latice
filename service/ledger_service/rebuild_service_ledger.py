@@ -4,7 +4,7 @@ import uuid
 from datetime import date as date_, datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from schema import (
     Account,
@@ -104,6 +104,55 @@ class RebuildServiceLedger:
 
 
     @staticmethod
+    def journal_entries_response(models: List[JournalEntryModel]) -> Dict[str, Any]:
+        """Build the JSON-ready journal listing payload from already-loaded models."""
+        entries = RebuildServiceLedger.rebuild_journal_entries(models)
+        return {
+            "count": len(entries),
+            "total_debit": round(sum(entry.total_amount for entry in entries), 2),
+            "entries": [
+                {
+                    "entry_id": model.entry_id,
+                    "date": model.date.isoformat() if model.date else None,
+                    "voucher_type": model.voucher_type,
+                    "narration": model.narration,
+                    "vendor_name": model.vendor_name,
+                    "invoice_number": model.invoice_number,
+                    "direction": model.direction,
+                    "total_amount": entry.total_amount,
+                    "lines": model.to_dict()["lines"],
+                }
+                for model, entry in zip(models, entries)
+            ],
+        }
+
+
+    def get_journal_entries(
+        self,
+        user_id: str,
+        date_from: date_,
+        date_to: date_,
+    ) -> Dict[str, Any]:
+        """Load and serialize one user's journal entries for a date range."""
+        with self.db_manager.session_scope() as session:
+            models = (
+                session.query(JournalEntryModel)
+                .options(joinedload(JournalEntryModel.lines))
+                .filter(
+                    JournalEntryModel.user_id == user_id,
+                    JournalEntryModel.date >= date_from,
+                    JournalEntryModel.date <= date_to,
+                )
+                .order_by(
+                    JournalEntryModel.date.asc(), 
+                    JournalEntryModel.id.asc()
+                )
+                .all()
+            )
+            return self.journal_entries_response(models)
+
+
+    @staticmethod
     def rebuild_tds_entry(model: TDSEntryModel) -> TDSEntry:
         return TDSEntry(
             section_code=model.section_code,
@@ -143,6 +192,35 @@ class RebuildServiceLedger:
             period_start=period_start,
             period_end=period_end
         )
+
+
+    def get_tds_register(
+        self,
+        user_id: str,
+        period_start: date_,
+        period_end: date_,
+    ) -> Dict[str, Any]:
+        """Load and serialize one user's TDS register for a date range."""
+        with self.db_manager.session_scope() as session:
+            models = (
+                session.query(TDSEntryModel)
+                .options(joinedload(TDSEntryModel.journal_entry))
+                .filter(
+                    TDSEntryModel.user_id == user_id,
+                    TDSEntryModel.date >= period_start,
+                    TDSEntryModel.date <= period_end,
+                )
+                .order_by(
+                    TDSEntryModel.date.asc(), 
+                    TDSEntryModel.id.asc())
+                .all()
+            )
+            register = self.rebuild_tds_register(
+                models=models, 
+                period_start=period_start, 
+                period_end=period_end
+            )
+            return register.to_dict()
 
 
     @staticmethod
